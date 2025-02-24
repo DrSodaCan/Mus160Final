@@ -1,67 +1,29 @@
-# spleeter_worker.py
-
-import traceback
-from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot
+from PyQt6.QtCore import QObject, pyqtSignal
 
 
 class SpleeterWorker(QObject):
-    # Emitted when separation is complete. The dict maps stem names (e.g., 'vocals', 'drums', etc.) to NumPy arrays.
     finished = pyqtSignal(dict)
-    # Emitted when an error occurs. The signal passes an error message.
     error = pyqtSignal(str)
 
-    @pyqtSlot(str)
-    def run(self, audio_file: str):
+    def run(self, file_path):
         """
-        Accepts an audio file path, processes it with Spleeter to separate the stems,
-        and emits the finished signal with a dictionary of separated stems.
-
-        :param audio_file: The file path to the audio file.
+        Runs Spleeter on the given file path to split it into 4 stems.
+        Emits finished with a dict of stems on success,
+        or error with an error message on failure.
         """
         try:
-            # Import Spleeter's Separator here to ensure it's only imported when needed.
             from spleeter.separator import Separator
+            from spleeter.audio.adapter import AudioAdapter
 
-            # Initialize the separator for 4 stems. You can change this to 'spleeter:2stems', etc.
-            separator = Separator('spleeter:4stems')
+            # Initialize separator for 4 stems
+            separator = Separator("spleeter:4stems")
+            audio_loader = AudioAdapter.default()
 
-            # Perform separation. This returns a dictionary, e.g.,
-            # {'vocals': np.array, 'drums': np.array, 'bass': np.array, 'other': np.array}
-            stems = separator.separate(audio_file)
+            # Load the audio file; sample_rate is forced to 44100 Hz for consistency
+            waveform, _ = audio_loader.load(file_path, sample_rate=44100)
 
-            # Emit the finished signal with the separated stems.
+            # Perform separation; returns a dict with keys: vocals, drums, bass, other
+            stems = separator.separate(waveform)
             self.finished.emit(stems)
         except Exception as e:
-            # Capture the full traceback for debugging.
-            tb = traceback.format_exc()
-            self.error.emit(f"Error processing file:\n{str(e)}\n{tb}")
-
-# Example usage (to be placed in your main module):
-#
-# from PyQt6.QtCore import QThread
-# from spleeter_worker import SpleeterWorker
-#
-# def handle_finished(stems):
-#     print("Separation complete!")
-#     for stem, data in stems.items():
-#         print(f"{stem}: {data.shape}")
-#
-# def handle_error(err_msg):
-#     print("An error occurred:", err_msg)
-#
-# # Create the worker and a thread to run it.
-# worker = SpleeterWorker()
-# thread = QThread()
-#
-# # Move the worker to the thread.
-# worker.moveToThread(thread)
-#
-# # Connect thread start to the worker's run method.
-# thread.started.connect(lambda: worker.run("path/to/your/audiofile.wav"))
-#
-# # Connect worker signals to your handlers.
-# worker.finished.connect(handle_finished)
-# worker.error.connect(handle_error)
-#
-# # Start the thread.
-# thread.start()
+            self.error.emit(str(e))
