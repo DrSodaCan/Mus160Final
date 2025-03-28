@@ -97,7 +97,7 @@ class TrackWidget(QWidget):
             self.start_time = time.time()
             self.playing = True
             self.play_button.setText("Stop")
-            self.timer.start(50)  # Update frequently for a smoother slider.
+            self.timer.start(50)
         else:
             # Stop playback and update offset.
             if self.player is not None:
