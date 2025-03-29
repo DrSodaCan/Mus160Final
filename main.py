@@ -2,7 +2,7 @@ import sys
 import time
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout,
-    QFileDialog, QSlider, QLabel, QHBoxLayout
+    QFileDialog, QSlider, QLabel, QHBoxLayout, QCheckBox
 )
 from PyQt6.QtCore import Qt, QTimer
 
@@ -10,8 +10,9 @@ from pyo import Server, SfPlayer, SndTable
 
 
 class TrackWidget(QWidget):
-    def __init__(self, track_name="Track"):
+    def __init__(self, track_name="Track", app=None):
         super().__init__()
+        self.app = app  # Reference to the main AudioPlayerApp.
         self.track_name = track_name
         self.file_path = None
         self.file_duration = 0.0  # Duration in seconds.
@@ -19,6 +20,7 @@ class TrackWidget(QWidget):
         self.playing = False
         self.offset = 0.0  # Playback start offset (seconds).
         self.start_time = 0.0  # Time when playback started.
+        self.seeking = False   # Flag to indicate slider dragging.
 
         self.setStyleSheet("background-color: #121212; border-radius: 10px; padding: 10px;")
         layout = QVBoxLayout()
@@ -50,12 +52,12 @@ class TrackWidget(QWidget):
         layout.addWidget(QLabel("Volume", self, styleSheet="color: white;"))
         layout.addWidget(self.volume_slider)
 
-        # Position Slider (using milliseconds for smooth updates).
+        # Position Slider.
         self.position_slider = QSlider(Qt.Orientation.Horizontal)
         self.position_slider.setMinimum(0)
-        # Default maximum; will be updated when a file is loaded.
-        self.position_slider.setMaximum(1000)
-        self.position_slider.sliderReleased.connect(self.seek_audio)
+        self.position_slider.setMaximum(1000)  # Will be updated when a file is loaded.
+        self.position_slider.sliderPressed.connect(self.on_slider_pressed)
+        self.position_slider.sliderReleased.connect(self.on_slider_released)
         layout.addWidget(QLabel("Position", self, styleSheet="color: white;"))
         layout.addWidget(self.position_slider)
 
@@ -71,10 +73,8 @@ class TrackWidget(QWidget):
         )
         if file_path:
             self.file_path = file_path
-            # Use SndTable to accurately get the duration.
             tbl = SndTable(file_path)
             self.file_duration = tbl.getDur()  # Duration in seconds.
-            # Set slider maximum in milliseconds.
             self.position_slider.setMaximum(int(self.file_duration * 1000))
             self.offset = 0.0
             if self.player is not None:
@@ -87,33 +87,43 @@ class TrackWidget(QWidget):
     def toggle_playback(self):
         if not self.file_path:
             return
+        # If sync is on and this action is not initiated by the app, broadcast the action.
+        if self.app and self.app.sync_checkbox.isChecked():
+            # In sync mode, always start from beginning.
+            self.app.sync_play(start=True)
+            return
+
         if not self.playing:
-            # Start playback from the current offset.
-            volume = self.volume_slider.value() / 100.0
-            self.player = SfPlayer(
-                self.file_path, speed=1, loop=False,
-                mul=volume, offset=self.offset
-            )
-            self.player.out()
-            self.start_time = time.time()
-            self.playing = True
-            self.play_button.setText("Stop")
-            self.timer.start(50)
+            self.start_from_offset(self.offset)
         else:
-            # Stop playback and update offset.
-            if self.player is not None:
-                self.player.stop()
-            self.offset += time.time() - self.start_time
-            self.playing = False
-            self.play_button.setText("Play")
-            self.timer.stop()
+            self.pause_playback()
+
+    def start_from_offset(self, offset_val):
+        volume = self.volume_slider.value() / 100.0
+        self.player = SfPlayer(
+            self.file_path, speed=1, loop=False,
+            mul=volume, offset=offset_val
+        )
+        self.player.out()
+        self.start_time = time.time()
+        self.playing = True
+        self.play_button.setText("Stop")
+        self.timer.start(50)
+
+    def pause_playback(self):
+        if self.player is not None:
+            self.player.stop()
+        # Update offset based on elapsed time.
+        self.offset += time.time() - self.start_time
+        self.playing = False
+        self.play_button.setText("Play")
+        self.timer.stop()
 
     def update_position(self):
-        if self.playing:
+        if self.playing and not self.seeking:
             elapsed = time.time() - self.start_time
             current_pos = self.offset + elapsed
             if current_pos >= self.file_duration:
-                # When the end is reached, set slider to max and stop playback.
                 self.position_slider.setValue(int(self.file_duration * 1000))
                 if self.player is not None:
                     self.player.stop()
@@ -121,14 +131,19 @@ class TrackWidget(QWidget):
                 self.play_button.setText("Play")
                 self.timer.stop()
                 self.offset = 0.0
-                # Removed resetting slider to 0 so that slider remains at the end.
             else:
                 self.position_slider.setValue(int(current_pos * 1000))
 
-    def seek_audio(self):
+    def on_slider_pressed(self):
+        self.seeking = True
+
+    def on_slider_released(self):
+        self.seeking = False
+        self.process_seek()
+
+    def process_seek(self):
         if not self.file_path:
             return
-        # Slider value is in milliseconds.
         new_pos_ms = self.position_slider.value()
         new_pos = new_pos_ms / 1000.0
         self.offset = new_pos
@@ -142,6 +157,9 @@ class TrackWidget(QWidget):
             )
             self.player.out()
             self.start_time = time.time()
+        # If sync is enabled, inform the main app.
+        if self.app and self.app.sync_checkbox.isChecked():
+            self.app.sync_seek(new_pos, origin=self)
 
     def update_volume(self):
         if self.player is not None:
@@ -155,39 +173,102 @@ class AudioPlayerApp(QWidget):
         self.setWindowTitle("Song Remastering App")
         self.setGeometry(100, 100, 1200, 300)
 
-        # Use a vertical layout so we can add the "Play All" button.
+        self.tracks = []  # To store our track widgets.
+
+        # Main vertical layout.
         main_layout = QVBoxLayout()
 
+        # Global Controls at the Top.
+        top_layout = QHBoxLayout()
+        self.play_all_button = QPushButton("Play All")
+        self.play_all_button.setStyleSheet("color: white;")
+        self.play_all_button.clicked.connect(self.global_play_pause)
+        top_layout.addWidget(self.play_all_button)
+
+        # Sync Tracks checkbox.
+        self.sync_checkbox = QCheckBox("Sync Tracks")
+        self.sync_checkbox.setStyleSheet("color: white;")
+        top_layout.addWidget(self.sync_checkbox)
+
+        # Add some spacing.
+        top_layout.addStretch()
+        main_layout.addLayout(top_layout)
+
+        # Tracks layout.
         tracks_layout = QHBoxLayout()
-        self.track1 = TrackWidget("Track 1")
-        self.track2 = TrackWidget("Track 2")
-        self.track3 = TrackWidget("Track 3")
-        self.track4 = TrackWidget("Track 4")
+        self.track1 = TrackWidget("Track 1", app=self)
+        self.track2 = TrackWidget("Track 2", app=self)
+        self.track3 = TrackWidget("Track 3", app=self)
+        self.track4 = TrackWidget("Track 4", app=self)
+        self.tracks = [self.track1, self.track2, self.track3, self.track4]
+
         tracks_layout.addWidget(self.track1)
         tracks_layout.addWidget(self.track2)
         tracks_layout.addWidget(self.track3)
         tracks_layout.addWidget(self.track4)
         main_layout.addLayout(tracks_layout)
 
-        # "Play All" Button.
-        self.play_all_button = QPushButton("Play All")
-        self.play_all_button.setStyleSheet("color: white;")
-        self.play_all_button.clicked.connect(self.play_all_tracks)
-        main_layout.addWidget(self.play_all_button)
-
         self.setLayout(main_layout)
         self.setStyleSheet("background-color: #1E1E1E; color: white;")
 
-    def play_all_tracks(self):
-        # Iterate through each track and start playback if a file is loaded.
-        for track in [self.track1, self.track2, self.track3, self.track4]:
-            if track.file_path and not track.playing:
-                track.toggle_playback()
+    def global_play_pause(self):
+        # If any track is playing, we assume "Pause All"
+        if any(track.playing for track in self.tracks):
+            self.sync_play(start=False)
+        else:
+            self.sync_play(start=True)
 
+    def sync_play(self, start=True):
+        """
+        When sync mode is enabled, this method either starts or pauses all tracks.
+        For now, starting always begins from the beginning.
+        """
+        if start:
+            for track in self.tracks:
+                if track.file_path:
+                    # Always start from beginning in sync mode.
+                    track.offset = 0.0
+                    track.start_from_offset(0.0)
+            self.play_all_button.setText("Pause All")
+        else:
+            for track in self.tracks:
+                if track.playing:
+                    track.pause_playback()
+            self.play_all_button.setText("Play All")
+
+    def sync_seek(self, new_pos, origin=None):
+        """
+        When one track seeks, update all other tracks (that are playing)
+        to the same position.
+        """
+        for track in self.tracks:
+            # Avoid re-syncing the track that initiated the seek.
+            if track is origin:
+                continue
+            if track.file_path:
+                # Stop current playback if active.
+                if track.playing:
+                    track.player.stop()
+                track.offset = new_pos
+                # Restart playback from new_pos if the origin is playing.
+                if origin.playing:
+                    volume = track.volume_slider.value() / 100.0
+                    track.player = SfPlayer(
+                        track.file_path, speed=1, loop=False,
+                        mul=volume, offset=new_pos
+                    )
+                    track.player.out()
+                    track.start_time = time.time()
+                    track.playing = True
+                    track.play_button.setText("Stop")
+        # Optionally, update the global play button text.
+        if origin and origin.playing:
+            self.play_all_button.setText("Pause All")
+        else:
+            self.play_all_button.setText("Play All")
 
 
 if __name__ == "__main__":
-    # Boot and start the pyo server.
     s = Server().boot()
     s.start()
 
