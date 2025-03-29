@@ -66,7 +66,7 @@ async def main():
     method = input("Choose separation method (spleeter/demucs): ").strip().lower()
 
     converted_file = convert_audio(file_path)
-
+    print("File ready")
     if method == "spleeter":
         stems = await spleeter_split(converted_file)
     elif method == "demucs":
@@ -82,3 +82,6 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
+    #C:/Users/AtlasG/Music/Garasudama.flac
+    #C:/Users/AtlasG/Music/converted_audio.wav
