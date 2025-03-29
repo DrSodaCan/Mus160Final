@@ -2,11 +2,67 @@ import sys
 import time
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout,
-    QFileDialog, QSlider, QLabel, QHBoxLayout, QCheckBox
+    QFileDialog, QSlider, QLabel, QHBoxLayout, QCheckBox, QComboBox, QStackedWidget
 )
 from PyQt6.QtCore import Qt, QTimer
 
 from pyo import Server, SfPlayer, SndTable
+
+
+# Dummy effect settings widget for Reverb.
+class ReverbSettingsWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Reverb Amount"))
+        self.amount_slider = QSlider(Qt.Orientation.Horizontal)
+        self.amount_slider.setRange(0, 100)
+        self.amount_slider.setValue(50)
+        layout.addWidget(self.amount_slider)
+        self.setLayout(layout)
+
+
+# Dummy effect settings widget for Delay.
+class DelaySettingsWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout()
+        layout.addWidget(QLabel("Delay Time (ms)"))
+        self.time_slider = QSlider(Qt.Orientation.Horizontal)
+        self.time_slider.setRange(0, 2000)
+        self.time_slider.setValue(500)
+        layout.addWidget(self.time_slider)
+        self.setLayout(layout)
+
+
+# The modular effects menu widget.
+class EffectModuleWidget(QWidget):
+    def __init__(self):
+        super().__init__()
+        layout = QVBoxLayout()
+
+        # Combo box for selecting the effect.
+        self.effect_combo = QComboBox()
+        self.effect_combo.addItems(["None", "Reverb", "Delay"])
+        self.effect_combo.currentIndexChanged.connect(self.change_effect)
+        layout.addWidget(QLabel("Select Effect"))
+        layout.addWidget(self.effect_combo)
+
+        # Stacked widget to show different effect settings.
+        self.effects_stack = QStackedWidget()
+        self.none_widget = QWidget()  # Empty widget for "None"
+        self.effects_stack.addWidget(self.none_widget)
+        self.reverb_widget = ReverbSettingsWidget()
+        self.effects_stack.addWidget(self.reverb_widget)
+        self.delay_widget = DelaySettingsWidget()
+        self.effects_stack.addWidget(self.delay_widget)
+
+        layout.addWidget(self.effects_stack)
+        self.setLayout(layout)
+
+    def change_effect(self, index):
+        self.effects_stack.setCurrentIndex(index)
+        # Here, you could also update the audio engine with the new effect.
 
 
 class TrackWidget(QWidget):
@@ -20,7 +76,7 @@ class TrackWidget(QWidget):
         self.playing = False
         self.offset = 0.0  # Playback start offset (seconds).
         self.start_time = 0.0  # Time when playback started.
-        self.seeking = False   # Flag to indicate slider dragging.
+        self.seeking = False  # Flag to indicate slider dragging.
 
         self.setStyleSheet("background-color: #121212; border-radius: 10px; padding: 10px;")
         layout = QVBoxLayout()
@@ -61,6 +117,10 @@ class TrackWidget(QWidget):
         layout.addWidget(QLabel("Position", self, styleSheet="color: white;"))
         layout.addWidget(self.position_slider)
 
+        # Here we add the effect module widget for this track.
+        self.effects_widget = EffectModuleWidget()
+        layout.addWidget(self.effects_widget)
+
         self.setLayout(layout)
 
         # Timer to update slider position.
@@ -87,9 +147,7 @@ class TrackWidget(QWidget):
     def toggle_playback(self):
         if not self.file_path:
             return
-        # If sync is on and this action is not initiated by the app, broadcast the action.
         if self.app and self.app.sync_checkbox.isChecked():
-            # In sync mode, always start from beginning.
             self.app.sync_play(start=True)
             return
 
@@ -113,7 +171,6 @@ class TrackWidget(QWidget):
     def pause_playback(self):
         if self.player is not None:
             self.player.stop()
-        # Update offset based on elapsed time.
         self.offset += time.time() - self.start_time
         self.playing = False
         self.play_button.setText("Play")
@@ -157,7 +214,6 @@ class TrackWidget(QWidget):
             )
             self.player.out()
             self.start_time = time.time()
-        # If sync is enabled, inform the main app.
         if self.app and self.app.sync_checkbox.isChecked():
             self.app.sync_seek(new_pos, origin=self)
 
@@ -173,9 +229,8 @@ class AudioPlayerApp(QWidget):
         self.setWindowTitle("Song Remastering App")
         self.setGeometry(100, 100, 1200, 300)
 
-        self.tracks = []  # To store our track widgets.
+        self.tracks = []
 
-        # Main vertical layout.
         main_layout = QVBoxLayout()
 
         # Global Controls at the Top.
@@ -185,12 +240,10 @@ class AudioPlayerApp(QWidget):
         self.play_all_button.clicked.connect(self.global_play_pause)
         top_layout.addWidget(self.play_all_button)
 
-        # Sync Tracks checkbox.
         self.sync_checkbox = QCheckBox("Sync Tracks")
         self.sync_checkbox.setStyleSheet("color: white;")
         top_layout.addWidget(self.sync_checkbox)
 
-        # Add some spacing.
         top_layout.addStretch()
         main_layout.addLayout(top_layout)
 
@@ -212,21 +265,15 @@ class AudioPlayerApp(QWidget):
         self.setStyleSheet("background-color: #1E1E1E; color: white;")
 
     def global_play_pause(self):
-        # If any track is playing, we assume "Pause All"
         if any(track.playing for track in self.tracks):
             self.sync_play(start=False)
         else:
             self.sync_play(start=True)
 
     def sync_play(self, start=True):
-        """
-        When sync mode is enabled, this method either starts or pauses all tracks.
-        For now, starting always begins from the beginning.
-        """
         if start:
             for track in self.tracks:
                 if track.file_path:
-                    # Always start from beginning in sync mode.
                     track.offset = 0.0
                     track.start_from_offset(0.0)
             self.play_all_button.setText("Pause All")
@@ -237,20 +284,13 @@ class AudioPlayerApp(QWidget):
             self.play_all_button.setText("Play All")
 
     def sync_seek(self, new_pos, origin=None):
-        """
-        When one track seeks, update all other tracks (that are playing)
-        to the same position.
-        """
         for track in self.tracks:
-            # Avoid re-syncing the track that initiated the seek.
             if track is origin:
                 continue
             if track.file_path:
-                # Stop current playback if active.
                 if track.playing:
                     track.player.stop()
                 track.offset = new_pos
-                # Restart playback from new_pos if the origin is playing.
                 if origin.playing:
                     volume = track.volume_slider.value() / 100.0
                     track.player = SfPlayer(
@@ -261,7 +301,6 @@ class AudioPlayerApp(QWidget):
                     track.start_time = time.time()
                     track.playing = True
                     track.play_button.setText("Stop")
-        # Optionally, update the global play button text.
         if origin and origin.playing:
             self.play_all_button.setText("Pause All")
         else:
