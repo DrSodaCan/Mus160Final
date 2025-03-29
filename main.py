@@ -82,6 +82,7 @@ class TrackWidget(QWidget):
                 self.player = None
             self.play_button.setText("Play")
             self.playing = False
+            self.position_slider.setValue(0)
 
     def toggle_playback(self):
         if not self.file_path:
@@ -112,7 +113,7 @@ class TrackWidget(QWidget):
             elapsed = time.time() - self.start_time
             current_pos = self.offset + elapsed
             if current_pos >= self.file_duration:
-                # When end is reached, set slider to max, stop playback, and reset.
+                # When the end is reached, set slider to max and stop playback.
                 self.position_slider.setValue(int(self.file_duration * 1000))
                 if self.player is not None:
                     self.player.stop()
@@ -120,7 +121,7 @@ class TrackWidget(QWidget):
                 self.play_button.setText("Play")
                 self.timer.stop()
                 self.offset = 0.0
-                self.position_slider.setValue(0)
+                # Removed resetting slider to 0 so that slider remains at the end.
             else:
                 self.position_slider.setValue(int(current_pos * 1000))
 
@@ -154,18 +155,35 @@ class AudioPlayerApp(QWidget):
         self.setWindowTitle("Song Remastering App")
         self.setGeometry(100, 100, 1200, 300)
 
-        layout = QHBoxLayout()
+        # Use a vertical layout so we can add the "Play All" button.
+        main_layout = QVBoxLayout()
+
+        tracks_layout = QHBoxLayout()
         self.track1 = TrackWidget("Track 1")
         self.track2 = TrackWidget("Track 2")
         self.track3 = TrackWidget("Track 3")
         self.track4 = TrackWidget("Track 4")
+        tracks_layout.addWidget(self.track1)
+        tracks_layout.addWidget(self.track2)
+        tracks_layout.addWidget(self.track3)
+        tracks_layout.addWidget(self.track4)
+        main_layout.addLayout(tracks_layout)
 
-        layout.addWidget(self.track1)
-        layout.addWidget(self.track2)
-        layout.addWidget(self.track3)
-        layout.addWidget(self.track4)
-        self.setLayout(layout)
+        # "Play All" Button.
+        self.play_all_button = QPushButton("Play All")
+        self.play_all_button.setStyleSheet("color: white;")
+        self.play_all_button.clicked.connect(self.play_all_tracks)
+        main_layout.addWidget(self.play_all_button)
+
+        self.setLayout(main_layout)
         self.setStyleSheet("background-color: #1E1E1E; color: white;")
+
+    def play_all_tracks(self):
+        # Iterate through each track and start playback if a file is loaded.
+        for track in [self.track1, self.track2, self.track3, self.track4]:
+            if track.file_path and not track.playing:
+                track.toggle_playback()
+
 
 
 if __name__ == "__main__":
