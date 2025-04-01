@@ -2,11 +2,11 @@ import sys
 import time
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout,
-    QFileDialog, QSlider, QLabel, QHBoxLayout, QCheckBox, QComboBox, QStackedWidget
+    QFileDialog, QSlider, QLabel, QHBoxLayout, QCheckBox, QComboBox
 )
 from PyQt6.QtCore import Qt, QTimer
 
-from pyo import Server, SfPlayer, SndTable
+from pyo import Server, SfPlayer, SndTable, Freeverb
 
 
 class TrackWidget(QWidget):
@@ -61,6 +61,14 @@ class TrackWidget(QWidget):
         layout.addWidget(QLabel("Position", self, styleSheet="color: white;"))
         layout.addWidget(self.position_slider)
 
+        # Effects Selector.
+        self.effect_combo = QComboBox()
+        self.effect_combo.addItem("None")
+        self.effect_combo.addItem("Reverb")
+        self.effect_combo.currentIndexChanged.connect(self.update_effect_chain)
+        layout.addWidget(QLabel("Effect", self, styleSheet="color: white;"))
+        layout.addWidget(self.effect_combo)
+
         self.setLayout(layout)
 
         # Timer to update slider position.
@@ -102,7 +110,9 @@ class TrackWidget(QWidget):
             self.file_path, speed=1, loop=False,
             mul=volume, offset=offset_val
         )
-        self.player.out()
+        # Store the processed output to avoid garbage collection.
+        self.effect = self.get_processed_output(self.player)
+        self.effect.out()
         self.start_time = time.time()
         self.playing = True
         self.play_button.setText("Stop")
@@ -152,7 +162,8 @@ class TrackWidget(QWidget):
                 self.file_path, speed=1, loop=False,
                 mul=volume, offset=self.offset
             )
-            self.player.out()
+            self.effect = self.get_processed_output(self.player)
+            self.effect.out()
             self.start_time = time.time()
         if self.app and self.app.sync_checkbox.isChecked():
             self.app.sync_seek(new_pos, origin=self)
@@ -161,6 +172,33 @@ class TrackWidget(QWidget):
         if self.player is not None:
             new_volume = self.volume_slider.value() / 100.0
             self.player.mul = new_volume
+
+    def get_processed_output(self, raw_signal):
+        """
+        Returns the processed output based on the effect selected.
+        """
+        effect = self.effect_combo.currentText()
+        if effect == "Reverb":
+            return self.apply_reverb(raw_signal)
+        else:
+            return raw_signal
+
+    def apply_reverb(self, signal):
+        """
+        Applies a reverb effect to the input signal using Freeverb.
+        """
+        # Parameters for reverb can be tweaked as needed.
+        return Freeverb(signal, size=0.8, damp=0.7, bal=0.5)
+
+    def update_effect_chain(self):
+        """
+        Called when the effect selection changes.
+        If the track is playing, reapply the effect chain from the current position.
+        """
+        if self.playing:
+            current_pos = self.offset + (time.time() - self.start_time)
+            self.pause_playback()
+            self.start_from_offset(current_pos)
 
 
 class AudioPlayerApp(QWidget):
@@ -237,7 +275,8 @@ class AudioPlayerApp(QWidget):
                         track.file_path, speed=1, loop=False,
                         mul=volume, offset=new_pos
                     )
-                    track.player.out()
+                    processed = track.get_processed_output(track.player)
+                    processed.out()
                     track.start_time = time.time()
                     track.playing = True
                     track.play_button.setText("Stop")
