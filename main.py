@@ -9,62 +9,6 @@ from PyQt6.QtCore import Qt, QTimer
 from pyo import Server, SfPlayer, SndTable
 
 
-# Dummy effect settings widget for Reverb.
-class ReverbSettingsWidget(QWidget):
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel("Reverb Amount"))
-        self.amount_slider = QSlider(Qt.Orientation.Horizontal)
-        self.amount_slider.setRange(0, 100)
-        self.amount_slider.setValue(50)
-        layout.addWidget(self.amount_slider)
-        self.setLayout(layout)
-
-
-# Dummy effect settings widget for Delay.
-class DelaySettingsWidget(QWidget):
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout()
-        layout.addWidget(QLabel("Delay Time (ms)"))
-        self.time_slider = QSlider(Qt.Orientation.Horizontal)
-        self.time_slider.setRange(0, 2000)
-        self.time_slider.setValue(500)
-        layout.addWidget(self.time_slider)
-        self.setLayout(layout)
-
-
-# The modular effects menu widget.
-class EffectModuleWidget(QWidget):
-    def __init__(self):
-        super().__init__()
-        layout = QVBoxLayout()
-
-        # Combo box for selecting the effect.
-        self.effect_combo = QComboBox()
-        self.effect_combo.addItems(["None", "Reverb", "Delay"])
-        self.effect_combo.currentIndexChanged.connect(self.change_effect)
-        layout.addWidget(QLabel("Select Effect"))
-        layout.addWidget(self.effect_combo)
-
-        # Stacked widget to show different effect settings.
-        self.effects_stack = QStackedWidget()
-        self.none_widget = QWidget()  # Empty widget for "None"
-        self.effects_stack.addWidget(self.none_widget)
-        self.reverb_widget = ReverbSettingsWidget()
-        self.effects_stack.addWidget(self.reverb_widget)
-        self.delay_widget = DelaySettingsWidget()
-        self.effects_stack.addWidget(self.delay_widget)
-
-        layout.addWidget(self.effects_stack)
-        self.setLayout(layout)
-
-    def change_effect(self, index):
-        self.effects_stack.setCurrentIndex(index)
-        # Here, you could also update the audio engine with the new effect.
-
-
 class TrackWidget(QWidget):
     def __init__(self, track_name="Track", app=None):
         super().__init__()
@@ -116,10 +60,6 @@ class TrackWidget(QWidget):
         self.position_slider.sliderReleased.connect(self.on_slider_released)
         layout.addWidget(QLabel("Position", self, styleSheet="color: white;"))
         layout.addWidget(self.position_slider)
-
-        # Here we add the effect module widget for this track.
-        self.effects_widget = EffectModuleWidget()
-        layout.addWidget(self.effects_widget)
 
         self.setLayout(layout)
 
