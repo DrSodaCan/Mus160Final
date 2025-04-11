@@ -2,12 +2,60 @@ import sys
 import time
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QPushButton, QVBoxLayout,
-    QFileDialog, QSlider, QLabel, QHBoxLayout, QCheckBox, QComboBox
+    QFileDialog, QSlider, QLabel, QHBoxLayout, QCheckBox, QComboBox, QStackedWidget
 )
 from PyQt6.QtCore import Qt, QTimer
-
 from pyo import Server, SfPlayer, SndTable, Freeverb
 
+class ReverbControlWidget(QWidget):
+    """
+    """
+    def __init__(self, parent_track):
+        super().__init__()
+        self.parent_track = parent_track
+        layout = QVBoxLayout()
+
+        # Size slider.
+        self.size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.size_slider.setRange(0, 100)
+        self.size_slider.setValue(80)
+        self.size_slider.valueChanged.connect(self.parameters_changed)
+        layout.addWidget(QLabel("Size"))
+        layout.addWidget(self.size_slider)
+
+        # Damp slider.
+        self.damp_slider = QSlider(Qt.Orientation.Horizontal)
+        self.damp_slider.setRange(0, 100)
+        self.damp_slider.setValue(70)
+        self.damp_slider.valueChanged.connect(self.parameters_changed)
+        layout.addWidget(QLabel("Damp"))
+        layout.addWidget(self.damp_slider)
+
+        # Balance slider.
+        self.bal_slider = QSlider(Qt.Orientation.Horizontal)
+        self.bal_slider.setRange(0, 100)
+        self.bal_slider.setValue(50)
+        self.bal_slider.valueChanged.connect(self.parameters_changed)
+        layout.addWidget(QLabel("Wet/Dry"))
+        layout.addWidget(self.bal_slidert)
+
+        self.setLayout(layout)
+
+    def parameters_changed(self):
+        """
+        Called when any slider value changes.
+        Update the reverb effect if it's active.
+        """
+        self.parent_track.update_reverb_params()
+
+    def get_values(self):
+        """
+        Returns the current values as floats in a normalized range (0.0 to 1.0).
+        """
+        size = self.size_slider.value() / 100.0
+        damp = self.damp_slider.value() / 100.0
+        bal = self.bal_slider.value() / 100.0
+        return size, damp, bal
 
 class TrackWidget(QWidget):
     def __init__(self, track_name="Track", app=None):
@@ -17,6 +65,7 @@ class TrackWidget(QWidget):
         self.file_path = None
         self.file_duration = 0.0  # Duration in seconds.
         self.player = None
+        self.effect = None  # Store the current processed effect.
         self.playing = False
         self.offset = 0.0  # Playback start offset (seconds).
         self.start_time = 0.0  # Time when playback started.
@@ -69,6 +118,15 @@ class TrackWidget(QWidget):
         layout.addWidget(QLabel("Effect", self, styleSheet="color: white;"))
         layout.addWidget(self.effect_combo)
 
+        # Effect Parameters Panel.
+        self.effect_params_widget = QStackedWidget()
+        # Page 0: Empty widget for "None".
+        self.effect_params_widget.addWidget(QWidget())
+        # Page 1: Reverb control widget.
+        self.reverb_controls = ReverbControlWidget(self)
+        self.effect_params_widget.addWidget(self.reverb_controls)
+        layout.addWidget(self.effect_params_widget)
+
         self.setLayout(layout)
 
         # Timer to update slider position.
@@ -110,7 +168,7 @@ class TrackWidget(QWidget):
             self.file_path, speed=1, loop=False,
             mul=volume, offset=offset_val
         )
-        # Store the processed output to avoid garbage collection.
+        # Apply the chosen effect.
         self.effect = self.get_processed_output(self.player)
         self.effect.out()
         self.start_time = time.time()
@@ -179,27 +237,41 @@ class TrackWidget(QWidget):
         """
         effect = self.effect_combo.currentText()
         if effect == "Reverb":
-            return self.apply_reverb(raw_signal)
+            # Read parameter values from the reverb controls.
+            size, damp, bal = self.reverb_controls.get_values()
+            return Freeverb(raw_signal, size=size, damp=damp, bal=bal)
         else:
             return raw_signal
-
-    def apply_reverb(self, signal):
-        """
-        Applies a reverb effect to the input signal using Freeverb.
-        """
-        # Parameters for reverb can be tweaked as needed.
-        return Freeverb(signal, size=0.8, damp=0.7, bal=0.5)
 
     def update_effect_chain(self):
         """
         Called when the effect selection changes.
-        If the track is playing, reapply the effect chain from the current position.
+        Switch the parameters panel and reapply the effect chain.
         """
+        effect = self.effect_combo.currentText()
+        if effect == "Reverb":
+            self.effect_params_widget.setCurrentIndex(1)
+        else:
+            self.effect_params_widget.setCurrentIndex(0)
+
         if self.playing:
             current_pos = self.offset + (time.time() - self.start_time)
             self.pause_playback()
             self.start_from_offset(current_pos)
 
+    def update_reverb_params(self):
+        """
+        Called from the reverb controls when a parameter changes.
+        If the track is playing and the current effect is reverb,
+        update the parameters of the Freeverb object.
+        """
+        if self.effect_combo.currentText() == "Reverb" and self.effect is not None:
+            # Re-read parameter values.
+            size, damp, bal = self.reverb_controls.get_values()
+            # Update Freeverb parameters directly.
+            self.effect.size = size
+            self.effect.damp = damp
+            self.effect.bal = bal
 
 class AudioPlayerApp(QWidget):
     def __init__(self):
@@ -284,7 +356,6 @@ class AudioPlayerApp(QWidget):
             self.play_all_button.setText("Pause All")
         else:
             self.play_all_button.setText("Play All")
-
 
 if __name__ == "__main__":
     s = Server().boot()
