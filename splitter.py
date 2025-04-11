@@ -29,29 +29,52 @@ def convert_audio(file_path: str) -> str:
             audio.export(cached_file, format="wav")
         return cached_file
 
+
 async def spleeter_split(file_path: str, output_dir: str = None) -> tuple:
-    """Splits a song into stems using Spleeter and saves output in the cache."""
-    # Use a cache folder subdirectory for Spleeter output.
+    """Splits a song into stems using Spleeter and caches the result."""
+    from utils import get_cache_dir
     if output_dir is None:
         output_dir = os.path.join(get_cache_dir(), "Spleeter_Output")
     os.makedirs(output_dir, exist_ok=True)
-    separator = Separator("spleeter:4stems")
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, separator.separate_to_file, file_path, output_dir)
 
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     track_folder = os.path.join(output_dir, base_name)
     expected_tracks = ("vocals.wav", "drums.wav", "bass.wav", "other.wav")
-    track_paths = tuple(os.path.join(track_folder, track) for track in expected_tracks)
-    return track_paths
+
+    # Check if the folder exists and has the expected output files.
+    if os.path.isdir(track_folder) and all(os.path.exists(os.path.join(track_folder, t)) for t in expected_tracks):
+        print(f"Cache hit: Using previously split files from {track_folder}")
+        return tuple(os.path.join(track_folder, t) for t in expected_tracks)
+
+    # Otherwise, perform the splitting.
+    print("Cache miss: Running Spleeter splitting process...")
+    from spleeter.separator import Separator
+    separator = Separator("spleeter:4stems")
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, separator.separate_to_file, file_path, output_dir)
+
+    return tuple(os.path.join(track_folder, t) for t in expected_tracks)
+
 
 async def demucs_split(file_path: str, output_dir: str = None) -> tuple:
-    """Splits a song into stems using Demucs and saves output in the cache."""
-    # Use a cache folder subdirectory for Demucs output.
+    """Splits a song into stems using Demucs and caches the result."""
+    from utils import get_cache_dir
     if output_dir is None:
         output_dir = os.path.join(get_cache_dir(), "Demucs_Output")
     os.makedirs(output_dir, exist_ok=True)
 
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    song_output_folder = os.path.join(output_dir, base_name)
+    stem_files = ("bass.wav", "drums.wav", "other.wav", "vocals.wav")
+
+    # Check if the output folder exists with all required stem files.
+    if os.path.isdir(song_output_folder) and all(
+            os.path.exists(os.path.join(song_output_folder, s)) for s in stem_files):
+        print(f"Cache hit: Using previously split files from {song_output_folder}")
+        return tuple(os.path.join(song_output_folder, s) for s in stem_files)
+
+    # Otherwise, perform the Demucs splitting.
+    print("Cache miss: Running Demucs splitting process...")
     process = await asyncio.create_subprocess_exec(
         "demucs", "--out", output_dir, file_path,
         stdout=asyncio.subprocess.PIPE,
@@ -61,11 +84,7 @@ async def demucs_split(file_path: str, output_dir: str = None) -> tuple:
     if process.returncode != 0:
         raise RuntimeError(f"Demucs failed:\n{stderr.decode()}")
 
-    base_name = os.path.splitext(os.path.basename(file_path))[0]
-    song_output_folder = os.path.join(output_dir, base_name)
-    stem_files = ("bass.wav", "drums.wav", "other.wav", "vocals.wav")
-    stem_paths = tuple(os.path.join(song_output_folder, stem) for stem in stem_files)
-    return stem_paths
+    return tuple(os.path.join(song_output_folder, s) for s in stem_files)
 
 # JUST FOR DEBUGGING BELOW
 async def main():
