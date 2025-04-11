@@ -37,7 +37,7 @@ class ReverbControlWidget(QWidget):
         self.bal_slider.setValue(50)
         self.bal_slider.valueChanged.connect(self.parameters_changed)
         layout.addWidget(QLabel("Wet/Dry"))
-        layout.addWidget(self.bal_slidert)
+        layout.addWidget(self.bal_slider)
 
         self.setLayout(layout)
 
