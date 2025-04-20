@@ -64,7 +64,7 @@ async def demucs_split(file_path: str, output_dir: str = None) -> tuple:
     os.makedirs(output_dir, exist_ok=True)
 
     base_name = os.path.splitext(os.path.basename(file_path))[0]
-    song_output_folder = os.path.join(output_dir, base_name)
+    song_output_folder = os.path.join(output_dir, "htdemucs", base_name)
     stem_files = ("bass.wav", "drums.wav", "other.wav", "vocals.wav")
 
     # Check if the output folder exists with all required stem files.
@@ -84,6 +84,7 @@ async def demucs_split(file_path: str, output_dir: str = None) -> tuple:
     if process.returncode != 0:
         raise RuntimeError(f"Demucs failed:\n{stderr.decode()}")
 
+    # Return the new expected path
     return tuple(os.path.join(song_output_folder, s) for s in stem_files)
 
 # JUST FOR DEBUGGING BELOW
