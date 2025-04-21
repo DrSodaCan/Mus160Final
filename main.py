@@ -1,493 +1,355 @@
-# main.py
 import sys
-import time
-import asyncio
 import os
-
+import asyncio
+import soundfile as sf
+import numpy as np
+import sounddevice as sd
 from PyQt6.QtWidgets import (
-    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QFileDialog,
-    QSlider, QLabel, QCheckBox, QComboBox, QStackedWidget, QDialog, QMessageBox
+    QApplication, QWidget, QVBoxLayout, QPushButton,
+    QFileDialog, QLabel, QSlider, QHBoxLayout, QComboBox,
+    QFormLayout, QSpacerItem, QSizePolicy, QCheckBox,
+    QDialog, QLineEdit, QMessageBox
 )
-from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
+from PyQt6.QtCore import Qt, QTimer
+from pedalboard import Pedalboard, Reverb, Delay
+from splitter import convert_audio, spleeter_split, demucs_split
 
-from pyo import Server, SfPlayer, SndTable, Freeverb
 
-# Import caching helper.
-from utils import cache_file
-
-# === TrackWidget with added support for external file input === #
-class TrackWidget(QWidget):
-    def __init__(self, track_name="Track", app=None):
+class Track(QWidget):
+    def __init__(self, track_number, sync_callback=None, get_sync_state=None):
         super().__init__()
-        self.app = app  # Reference to the main AudioPlayerApp.
-        self.track_name = track_name
-        self.file_path = None
-        self.file_duration = 0.0  # Duration in seconds.
-        self.player = None
-        self.effect = None  # Store the current processed effect.
-        self.playing = False
-        self.offset = 0.0  # Playback start offset (seconds).
-        self.start_time = 0.0  # Time when playback started.
-        self.seeking = False  # Flag to indicate slider dragging.
+        self.track_number = track_number
+        self.sync_callback = sync_callback
+        self.get_sync_state = get_sync_state
+        self.original_audio_data = None
+        self.audio_data = None
+        self.sample_rate = None
+        self.stream = None
+        self.is_playing = False
+        self.position = 0
+        self.effect_params = {}
+        self.board = Pedalboard([])
 
-        self.setStyleSheet("background-color: #121212; border-radius: 10px; padding: 10px;")
+        self.init_ui()
+
+    def init_ui(self):
         layout = QVBoxLayout()
+        layout.setSpacing(15)
 
-        # Track Name Label.
-        self.label = QLabel(track_name)
-        self.label.setStyleSheet("color: white; font-size: 16px;")
+        layout.addSpacerItem(QSpacerItem(0, 10, QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed))
+
+        self.label = QLabel(f"Track {self.track_number}: No file loaded")
         layout.addWidget(self.label)
 
-        # File Select Button.
-        self.select_button = QPushButton("Select File")
-        self.select_button.setStyleSheet("color: white;")
-        self.select_button.clicked.connect(self.load_file)
-        layout.addWidget(self.select_button)
+        self.import_button = QPushButton('Import')
+        self.import_button.clicked.connect(self.import_audio)
+        layout.addWidget(self.import_button)
 
-        # Play Button.
-        self.play_button = QPushButton("Play")
-        self.play_button.setStyleSheet("color: white;")
-        self.play_button.clicked.connect(self.toggle_playback)
-        layout.addWidget(self.play_button)
+        self.play_pause_button = QPushButton('Play')
+        self.play_pause_button.clicked.connect(self.toggle_play_pause)
+        self.play_pause_button.setEnabled(False)
+        layout.addWidget(self.play_pause_button)
 
-        # Volume Slider.
+        volume_layout = QHBoxLayout()
+        volume_layout.addWidget(QLabel('Volume'))
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
-        self.volume_slider.setMinimum(0)
-        self.volume_slider.setMaximum(100)
-        self.volume_slider.setValue(100)
-        self.volume_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
-        self.volume_slider.valueChanged.connect(self.update_volume)
-        layout.addWidget(QLabel("Volume", self, styleSheet="color: white;"))
-        layout.addWidget(self.volume_slider)
+        self.volume_slider.setRange(0, 100)
+        self.volume_slider.setValue(50)
+        volume_layout.addWidget(self.volume_slider)
+        layout.addLayout(volume_layout)
 
-        # Position Slider.
-        self.position_slider = QSlider(Qt.Orientation.Horizontal)
-        self.position_slider.setMinimum(0)
-        self.position_slider.setMaximum(1000)  # Will be updated when a file is loaded.
-        self.position_slider.sliderPressed.connect(self.on_slider_pressed)
-        self.position_slider.sliderReleased.connect(self.on_slider_released)
-        layout.addWidget(QLabel("Position", self, styleSheet="color: white;"))
-        layout.addWidget(self.position_slider)
+        self.progress_slider = QSlider(Qt.Orientation.Horizontal)
+        self.progress_slider.setRange(0, 1000)
+        self.progress_slider.sliderMoved.connect(self.seek_position)
+        layout.addWidget(self.progress_slider)
 
-        # Effects Selector.
-        self.effect_combo = QComboBox()
-        self.effect_combo.addItem("None")
-        self.effect_combo.addItem("Reverb")
-        self.effect_combo.currentIndexChanged.connect(self.update_effect_chain)
-        layout.addWidget(QLabel("Effect", self, styleSheet="color: white;"))
-        layout.addWidget(self.effect_combo)
+        effects_layout = QFormLayout()
+        self.effects_dropdown = QComboBox()
+        self.effects_dropdown.addItems(["None", "Reverb", "Delay"])
+        self.effects_dropdown.currentTextChanged.connect(self.effect_changed)
+        effects_layout.addRow("Effects:", self.effects_dropdown)
+        layout.addLayout(effects_layout)
 
-        # Effect Parameters Panel.
-        self.effect_params_widget = QStackedWidget()
-        # Page 0: Empty widget for "None".
-        self.effect_params_widget.addWidget(QWidget())
-        # Page 1: Reverb control widget.
-        self.reverb_controls = ReverbControlWidget(self)
-        self.effect_params_widget.addWidget(self.reverb_controls)
-        layout.addWidget(self.effect_params_widget)
+        self.effects_options_layout = QFormLayout()
+        layout.addLayout(self.effects_options_layout)
+
+        self.timer = QTimer()
+        self.timer.timeout.connect(self.update_progress)
 
         self.setLayout(layout)
 
-        # Timer to update slider position.
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_position)
+    def import_audio(self):
+        filename, _ = QFileDialog.getOpenFileName(self, "Open Audio File", "", "Audio Files (*.wav *.mp3 *.flac)")
+        if filename:
+            self.load_audio(filename)
 
-    def load_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Audio File", "", "Audio Files (*.wav *.mp3 *.flac)"
-        )
-        if file_path:
-            # Cache the file in the OS-specific folder.
-            cached_path = cache_file(file_path)
-            self.set_file(cached_path)
+    def load_audio(self, filename: str):
+        self.original_audio_data, self.sample_rate = sf.read(filename, always_2d=True)
+        self.apply_effect()
+        self.label.setText(f"Track {self.track_number}: {os.path.basename(filename)}")
+        self.play_pause_button.setEnabled(True)
 
-    def set_file(self, file_path: str):
-        """Allow a track to accept a new audio file from a function call."""
-        self.file_path = file_path
-        print("New incoming filepath: ", self.file_path)
-        # Update the track label to show the file name (helps confirm that the file is loaded)
-        base_name = os.path.basename(file_path)
-        self.label.setText(f"{self.track_name} - {base_name}")
-        try:
-            tbl = SndTable(file_path)
-        except Exception as e:
-            print(f"Error loading file '{file_path}': {e}")
+    def audio_callback(self, outdata, frames, time, status):
+        if status:
+            print(status)
+        chunk = self.audio_data[self.position:self.position + frames]
+        volume = self.volume_slider.value() / 100
+        if len(chunk) < frames:
+            outdata[:len(chunk)] = chunk * volume
+            outdata[len(chunk):] = 0
+            self.stop_audio()
             return
-        self.file_duration = tbl.getDur()  # Duration in seconds.
-        self.position_slider.setMaximum(int(self.file_duration * 1000))
-        self.offset = 0.0
-        if self.player is not None:
-            self.player.stop()
-            self.player = None
-        self.play_button.setText("Play")
-        self.playing = False
-        self.position_slider.setValue(0)
+        outdata[:] = chunk * volume
+        self.position += frames
 
-    def toggle_playback(self):
-        if not self.file_path:
-            return
-        if self.app and self.app.sync_checkbox.isChecked():
-            self.app.sync_play(start=True)
-            return
-
-        if not self.playing:
-            self.start_from_offset(self.offset)
+    def toggle_play_pause(self):
+        if self.get_sync_state and self.get_sync_state():
+            if self.sync_callback:
+                self.sync_callback(self)
         else:
-            self.pause_playback()
+            self.play_pause_audio()
 
-    def start_from_offset(self, offset_val):
-        volume = self.volume_slider.value() / 100.0
-        self.player = SfPlayer(
-            self.file_path, speed=1, loop=False,
-            mul=volume, offset=offset_val
-        )
-        # Apply the chosen effect.
-        self.effect = self.get_processed_output(self.player)
-        self.effect.out()
-        self.start_time = time.time()
-        self.playing = True
-        self.play_button.setText("Stop")
-        self.timer.start(50)
+    def play_pause_audio(self):
+        if not self.is_playing:
+            if self.position >= len(self.audio_data):
+                self.position = 0
+            self.stream = sd.OutputStream(samplerate=self.sample_rate,
+                                          channels=self.audio_data.shape[1],
+                                          callback=self.audio_callback)
+            self.stream.start()
+            self.play_pause_button.setText('Pause')
+            self.timer.start(100)
+            self.is_playing = True
+        else:
+            self.stop_audio()
 
-    def pause_playback(self):
-        if self.player is not None:
-            self.player.stop()
-        self.offset += time.time() - self.start_time
-        self.playing = False
-        self.play_button.setText("Play")
+    def stop_audio(self):
+        if self.stream:
+            self.stream.stop()
+            self.stream.close()
+            self.stream = None
         self.timer.stop()
+        self.play_pause_button.setText('Play')
+        self.is_playing = False
 
-    def update_position(self):
-        if self.playing and not self.seeking:
-            elapsed = time.time() - self.start_time
-            current_pos = self.offset + elapsed
-            if current_pos >= self.file_duration:
-                self.position_slider.setValue(int(self.file_duration * 1000))
-                if self.player is not None:
-                    self.player.stop()
-                self.playing = False
-                self.play_button.setText("Play")
-                self.timer.stop()
-                self.offset = 0.0
-            else:
-                self.position_slider.setValue(int(current_pos * 1000))
+    def update_progress(self):
+        if self.audio_data is not None:
+            progress = int((self.position / len(self.audio_data)) * 1000)
+            self.progress_slider.setValue(progress)
 
-    def on_slider_pressed(self):
-        self.seeking = True
+    def seek_position(self, position):
+        if self.audio_data is not None:
+            new_pos = min(max(0, int((position / 1000) * len(self.audio_data))), len(self.audio_data) - 1)
+            self.position = new_pos
+            if self.get_sync_state and self.get_sync_state():
+                if self.sync_callback:
+                    self.sync_callback(self, seek_only=True)
 
-    def on_slider_released(self):
-        self.seeking = False
-        self.process_seek()
+    def effect_changed(self, effect_name):
+        while self.effects_options_layout.count():
+            item = self.effects_options_layout.takeAt(0)
+            widget = item.widget()
+            if widget:
+                widget.deleteLater()
 
-    def process_seek(self):
-        if not self.file_path:
+        self.effect_params.clear()
+        if effect_name == "Reverb":
+            room_slider = QSlider(Qt.Orientation.Horizontal)
+            room_slider.setRange(0, 100)
+            room_slider.setValue(50)
+            room_slider.valueChanged.connect(self.apply_effect)
+            self.effects_options_layout.addRow("Room Size:", room_slider)
+            self.effect_params['room_size'] = room_slider
+
+        elif effect_name == "Delay":
+            delay_slider = QSlider(Qt.Orientation.Horizontal)
+            delay_slider.setRange(1, 2000)
+            delay_slider.setValue(500)
+            delay_slider.sliderReleased.connect(self.apply_effect)
+            self.effects_options_layout.addRow("Delay (ms):", delay_slider)
+            self.effect_params['delay_seconds'] = delay_slider
+
+        self.apply_effect()
+
+    def apply_effect(self):
+        if self.original_audio_data is None:
             return
-        new_pos_ms = self.position_slider.value()
-        new_pos = new_pos_ms / 1000.0
-        self.offset = new_pos
-        if self.playing:
-            if self.player is not None:
-                self.player.stop()
-            volume = self.volume_slider.value() / 100.0
-            self.player = SfPlayer(
-                self.file_path, speed=1, loop=False,
-                mul=volume, offset=self.offset
-            )
-            self.effect = self.get_processed_output(self.player)
-            self.effect.out()
-            self.start_time = time.time()
-        if self.app and self.app.sync_checkbox.isChecked():
-            self.app.sync_seek(new_pos, origin=self)
 
-    def update_volume(self):
-        if self.player is not None:
-            new_volume = self.volume_slider.value() / 100.0
-            self.player.mul = new_volume
-
-    def get_processed_output(self, raw_signal):
-        """Returns the processed output based on the effect selected."""
-        effect = self.effect_combo.currentText()
-        if effect == "Reverb":
-            # Read parameter values from the reverb controls.
-            size, damp, bal = self.reverb_controls.get_values()
-            return Freeverb(raw_signal, size=size, damp=damp, bal=bal)
+        effect_name = self.effects_dropdown.currentText()
+        if effect_name == "Reverb":
+            room_size = self.effect_params['room_size'].value() / 100
+            self.board = Pedalboard([Reverb(room_size=room_size)])
+        elif effect_name == "Delay":
+            delay_seconds = self.effect_params['delay_seconds'].value() / 1000
+            self.board = Pedalboard([Delay(delay_seconds=delay_seconds)])
         else:
-            return raw_signal
+            self.board = Pedalboard([])
 
-    def update_effect_chain(self):
-        """Called when the effect selection changes."""
-        effect = self.effect_combo.currentText()
-        if effect == "Reverb":
-            self.effect_params_widget.setCurrentIndex(1)
-        else:
-            self.effect_params_widget.setCurrentIndex(0)
-
-        if self.playing:
-            current_pos = self.offset + (time.time() - self.start_time)
-            self.pause_playback()
-            self.start_from_offset(current_pos)
-
-    def update_reverb_params(self):
-        """If reverb is active and parameters change, update the effect."""
-        if self.effect_combo.currentText() == "Reverb" and self.effect is not None:
-            size, damp, bal = self.reverb_controls.get_values()
-            self.effect.size = size
-            self.effect.damp = damp
-            self.effect.bal = bal
+        self.audio_data = self.board(self.original_audio_data.copy(), self.sample_rate)
 
 
-class ReverbControlWidget(QWidget):
-    def __init__(self, parent_track):
-        super().__init__()
-        self.parent_track = parent_track
-        layout = QVBoxLayout()
-
-        # Size slider.
-        self.size_slider = QSlider(Qt.Orientation.Horizontal)
-        self.size_slider.setRange(0, 100)
-        self.size_slider.setValue(80)
-        self.size_slider.valueChanged.connect(self.parameters_changed)
-        layout.addWidget(QLabel("Size"))
-        layout.addWidget(self.size_slider)
-
-        # Damp slider.
-        self.damp_slider = QSlider(Qt.Orientation.Horizontal)
-        self.damp_slider.setRange(0, 100)
-        self.damp_slider.setValue(70)
-        self.damp_slider.valueChanged.connect(self.parameters_changed)
-        layout.addWidget(QLabel("Damp"))
-        layout.addWidget(self.damp_slider)
-
-        # Balance slider.
-        self.bal_slider = QSlider(Qt.Orientation.Horizontal)
-        self.bal_slider.setRange(0, 100)
-        self.bal_slider.setValue(50)
-        self.bal_slider.valueChanged.connect(self.parameters_changed)
-        layout.addWidget(QLabel("Wet/Dry"))
-        layout.addWidget(self.bal_slider)
-
-        self.setLayout(layout)
-
-    def parameters_changed(self):
-        self.parent_track.update_reverb_params()
-
-    def get_values(self):
-        size = self.size_slider.value() / 100.0
-        damp = self.damp_slider.value() / 100.0
-        bal = self.bal_slider.value() / 100.0
-        return size, damp, bal
-
-# === Splitter Worker and Dialog === #
-
-class SplittingWorker(QThread):
-    finished = pyqtSignal(list)
-    progress = pyqtSignal(str)
-
-    def __init__(self, file_path, method):
-        super().__init__()
-        self.file_path = file_path
-        self.method = method  # Should be either "spleeter" or "demucs"
-
-    def run(self):
-        # Since the splitting functions are async, we create a new event loop.
-        import asyncio
-        from utils import cache_file
-        # Cache the file first.
-        cached_file = cache_file(self.file_path)
-        self.progress.emit("Starting splitting...")
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        if self.method == "spleeter":
-            from splitter import spleeter_split
-            stems = loop.run_until_complete(spleeter_split(cached_file))
-        else:
-            from splitter import demucs_split
-            stems = loop.run_until_complete(demucs_split(cached_file))
-        loop.close()
-        self.finished.emit(stems)
-
-class SplitterDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Audio Splitter Tool")
-        self.setGeometry(200, 200, 500, 250)
-        layout = QVBoxLayout()
-
-        # File selection widgets.
-        file_layout = QHBoxLayout()
-        self.file_path_label = QLabel("No file selected")
-        self.select_file_button = QPushButton("Select File")
-        self.select_file_button.clicked.connect(self.select_file)
-        file_layout.addWidget(self.file_path_label)
-        file_layout.addWidget(self.select_file_button)
-        layout.addLayout(file_layout)
-
-        # Method selection.
-        layout.addWidget(QLabel("Choose Separation Method:"))
-        self.method_combo = QComboBox()
-        self.method_combo.addItems(["Spleeter", "Demucs"])
-        layout.addWidget(self.method_combo)
-
-        # Start button.
-        self.start_button = QPushButton("Start Splitting")
-        self.start_button.clicked.connect(self.start_splitting)
-        layout.addWidget(self.start_button)
-
-        # Progress label (as a stand-in for a waiting animation).
-        self.progress_label = QLabel("")
-        layout.addWidget(self.progress_label)
-
-        self.setLayout(layout)
-        self.worker = None
-        self.file_path = None
-
-    def select_file(self):
-        file_path, _ = QFileDialog.getOpenFileName(
-            self, "Select Audio File", "", "Audio Files (*.mp3 *.wav *.flac)"
-        )
-        if file_path:
-            self.file_path = file_path
-            self.file_path_label.setText(file_path)
-        else:
-            self.file_path = None
-
-    def start_splitting(self):
-        if not self.file_path:
-            self.progress_label.setText("Please select a file.")
-            return
-        self.start_button.setEnabled(False)
-        self.progress_label.setText("Processing...")
-        method = self.method_combo.currentText().lower()
-        self.worker = SplittingWorker(self.file_path, method)
-        self.worker.progress.connect(self.update_progress)
-        self.worker.finished.connect(self.splitting_finished)
-        self.worker.start()
-
-    def update_progress(self, message):
-        self.progress_label.setText(message)
-
-    def splitting_finished(self, stems):
-        self.progress_label.setText("Splitting complete!")
-        files_str = "\n".join(stems)
-        parent = self.parent()
-        if parent and hasattr(parent, "tracks"):
-            tracks = parent.tracks
-            # Here we simply map the separated stems (by order) into the four track widgets.
-            for i, track in enumerate(tracks):
-                if i < len(stems):
-                    print(f"Setting file for {track.track_name} to {stems[i]}")
-                    track.set_file(stems[i])
-            track_info = "\n".join(f"{track.track_name}: {stems[i]}" for i, track in enumerate(tracks) if i < len(stems))
-            QMessageBox.information(self, "Splitting Complete",
-                                    f"Separated stems have been loaded into the tracks:\n{track_info}")
-        else:
-            QMessageBox.information(self, "Splitting Complete", f"Separated stems:\n{files_str}")
-        self.start_button.setEnabled(True)
-
-
-# === Main Audio Player App === #
-
-class AudioPlayerApp(QWidget):
+class AudioApp(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Song Remastering App")
-        self.setGeometry(100, 100, 1200, 300)
-
         self.tracks = []
+        self.sync_enabled = False
+        self.init_ui()
 
+    def init_ui(self):
         main_layout = QVBoxLayout()
 
-        # Global controls at the top.
-        top_layout = QHBoxLayout()
-        self.play_all_button = QPushButton("Play All")
-        self.play_all_button.setStyleSheet("color: white;")
-        self.play_all_button.clicked.connect(self.global_play_pause)
-        top_layout.addWidget(self.play_all_button)
+        control_layout = QHBoxLayout()
+        self.play_all_button = QPushButton("Play All Tracks")
+        self.play_all_button.clicked.connect(self.play_all_tracks)
+        control_layout.addWidget(self.play_all_button)
 
-        self.sync_checkbox = QCheckBox("Sync Tracks")
-        self.sync_checkbox.setStyleSheet("color: white;")
-        top_layout.addWidget(self.sync_checkbox)
+        self.add_track_button = QPushButton("Add Track")
+        self.add_track_button.clicked.connect(self.add_new_track)
+        control_layout.addWidget(self.add_track_button)
 
-        # New button to open the Splitter dialog.
-        self.open_splitter_button = QPushButton("Open Splitter")
-        self.open_splitter_button.setStyleSheet("color: white;")
-        self.open_splitter_button.clicked.connect(self.open_splitter_dialog)
-        top_layout.addWidget(self.open_splitter_button)
+        self.sync_checkbox = QCheckBox("Sync Playback")
+        self.sync_checkbox.stateChanged.connect(self.toggle_sync)
+        control_layout.addWidget(self.sync_checkbox)
 
-        top_layout.addStretch()
-        main_layout.addLayout(top_layout)
+        self.splitter_button = QPushButton("Splitter")
+        self.splitter_button.clicked.connect(self.open_splitter_dialog)
+        control_layout.addWidget(self.splitter_button)
 
-        # Tracks layout.
-        tracks_layout = QHBoxLayout()
-        self.track1 = TrackWidget("Track 1", app=self)
-        self.track2 = TrackWidget("Track 2", app=self)
-        self.track3 = TrackWidget("Track 3", app=self)
-        self.track4 = TrackWidget("Track 4", app=self)
-        self.tracks = [self.track1, self.track2, self.track3, self.track4]
+        self.export_button = QPushButton("Export Tracks")
+        self.export_button.clicked.connect(self.export_tracks)
+        control_layout.addWidget(self.export_button)
 
-        tracks_layout.addWidget(self.track1)
-        tracks_layout.addWidget(self.track2)
-        tracks_layout.addWidget(self.track3)
-        tracks_layout.addWidget(self.track4)
-        main_layout.addLayout(tracks_layout)
+        main_layout.addLayout(control_layout)
+
+        self.track_container = QHBoxLayout()
+        main_layout.addLayout(self.track_container)
+
+        for i in range(4):
+            self.add_new_track()
 
         self.setLayout(main_layout)
-        self.setStyleSheet("background-color: #1E1E1E; color: white;")
+        self.setWindowTitle('Multi-Track Audio Player with Pedalboard')
+        self.resize(1200, 600)
 
-    def global_play_pause(self):
-        if any(track.playing for track in self.tracks):
-            self.sync_play(start=False)
-        else:
-            self.sync_play(start=True)
+    def add_new_track(self):
+        track = Track(len(self.tracks) + 1, self.sync_playback, self.get_sync_state)
+        self.tracks.append(track)
+        self.track_container.addWidget(track)
 
-    def sync_play(self, start=True):
-        if start:
-            for track in self.tracks:
-                if track.file_path:
-                    track.offset = 0.0
-                    track.start_from_offset(0.0)
-            self.play_all_button.setText("Pause All")
-        else:
-            for track in self.tracks:
-                if track.playing:
-                    track.pause_playback()
-            self.play_all_button.setText("Play All")
+    def get_sync_state(self):
+        return self.sync_enabled
 
-    def sync_seek(self, new_pos, origin=None):
+    def toggle_sync(self):
+        self.sync_enabled = self.sync_checkbox.isChecked()
+
+    def sync_playback(self, source_track, seek_only=False):
         for track in self.tracks:
-            if track is origin:
+            if track is source_track or track.audio_data is None:
                 continue
-            if track.file_path:
-                if track.playing:
-                    track.player.stop()
-                track.offset = new_pos
-                if origin.playing:
-                    volume = track.volume_slider.value() / 100.0
-                    track.player = SfPlayer(
-                        track.file_path, speed=1, loop=False,
-                        mul=volume, offset=new_pos
-                    )
-                    processed = track.get_processed_output(track.player)
-                    processed.out()
-                    track.start_time = time.time()
-                    track.playing = True
-                    track.play_button.setText("Stop")
-        if origin and origin.playing:
-            self.play_all_button.setText("Pause All")
-        else:
-            self.play_all_button.setText("Play All")
+            if seek_only:
+                track.position = source_track.position
+            else:
+                if source_track.is_playing:
+                    track.position = source_track.position
+                    if not track.is_playing:
+                        track.play_pause_audio()
+                else:
+                    if track.is_playing:
+                        track.stop_audio()
+
+    def play_all_tracks(self):
+        for track in self.tracks:
+            if track.audio_data is not None and not track.is_playing:
+                track.play_pause_audio()
 
     def open_splitter_dialog(self):
-        dialog = SplitterDialog(self)
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Splitter")
+        layout = QVBoxLayout()
+        form = QFormLayout()
+
+        file_layout = QHBoxLayout()
+        self.split_file_path = QLineEdit()
+        file_layout.addWidget(self.split_file_path)
+        browse_btn = QPushButton("Browse")
+        browse_btn.clicked.connect(lambda: self._browse_file())
+        file_layout.addWidget(browse_btn)
+        form.addRow("Input File:", file_layout)
+
+        self.method_combo = QComboBox()
+        self.method_combo.addItems(["Spleeter", "Demucs"])
+        form.addRow("Method:", self.method_combo)
+
+        layout.addLayout(form)
+        split_btn = QPushButton("Split and Load")
+        split_btn.clicked.connect(lambda: self.handle_split(dialog))
+        layout.addWidget(split_btn)
+
+        dialog.setLayout(layout)
         dialog.exec()
 
+    def _browse_file(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Select Audio File to Split", "", "Audio Files (*.wav *.mp3 *.flac)")
+        if path:
+            self.split_file_path.setText(path)
 
-if __name__ == "__main__":
-    # Boot the pyo server.
-    s = Server().boot()
-    s.start()
+    def handle_split(self, dialog):
+        file_path = self.split_file_path.text()
+        method = self.method_combo.currentText().lower()
+        if not file_path:
+            QMessageBox.warning(self, "No File", "Please select an input audio file.")
+            return
+        dialog.accept()
+        try:
+            converted = convert_audio(file_path)
+            if method == 'spleeter':
+                stems = asyncio.run(spleeter_split(converted))
+            else:
+                stems = asyncio.run(demucs_split(converted))
+            for i, track in enumerate(self.tracks[:4]):
+                track.load_audio(stems[i])
+        except Exception as e:
+            QMessageBox.critical(self, "Error during splitting", str(e))
 
+    def export_tracks(self):
+        # Collect mixed audio
+        mixed = None
+        sr = None
+        for track in self.tracks:
+            if track.audio_data is None:
+                continue
+            data = track.audio_data.copy()
+            # apply volume
+            volume = track.volume_slider.value() / 100
+            data *= volume
+            if mixed is None:
+                mixed = data
+                sr = track.sample_rate
+            else:
+                # pad shorter arrays
+                if data.shape[0] > mixed.shape[0]:
+                    pad = np.zeros((data.shape[0] - mixed.shape[0], mixed.shape[1]))
+                    mixed = np.vstack((mixed, pad))
+                elif mixed.shape[0] > data.shape[0]:
+                    pad = np.zeros((mixed.shape[0] - data.shape[0], data.shape[1]))
+                    data = np.vstack((data, pad))
+                mixed = mixed + data
+        if mixed is None:
+            QMessageBox.warning(self, "No Tracks", "No tracks loaded to export.")
+            return
+        # normalize
+        max_val = np.max(np.abs(mixed))
+        if max_val > 1:
+            mixed = mixed / max_val
+        # save
+        save_path, _ = QFileDialog.getSaveFileName(self, "Export Mixed Track", "", "WAV Files (*.wav)")
+        if save_path:
+            sf.write(save_path, mixed, sr)
+            QMessageBox.information(self, "Export Complete", f"Exported to {save_path}")
+
+
+if __name__ == '__main__':
     app = QApplication(sys.argv)
-    window = AudioPlayerApp()
+    window = AudioApp()
     window.show()
     sys.exit(app.exec())
