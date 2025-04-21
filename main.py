@@ -104,6 +104,9 @@ class Track(QWidget):
 
     def toggle_play_pause(self):
         if self.get_sync_state and self.get_sync_state():
+            # Toggle this track first
+            self.play_pause_audio()
+            # Then apply the same action to other tracks
             if self.sync_callback:
                 self.sync_callback(self)
         else:
