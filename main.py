@@ -264,21 +264,6 @@ class AudioApp(QWidget):
         self.global_slider.setValue(val)
         self.global_slider.blockSignals(False)
 
-    def seek_all(self, value):
-        # Seek each track to the corresponding position
-        # calculate max length
-        max_len = 1
-        for t in self.tracks:
-            if t.audio_data is not None:
-                max_len = max(max_len, len(t.audio_data))
-        target = int((value / 1000) * max_len)
-        for t in self.tracks:
-            if t.audio_data is not None:
-                t.position = min(target, len(t.audio_data))
-            else:
-                t.position = target
-            t.update_time()
-
     def open_splitter_dialog(self):
         dialog = QDialog(self)
         dialog.setWindowTitle('Splitter')
@@ -300,6 +285,21 @@ class AudioApp(QWidget):
         layout.addWidget(go)
         dialog.setLayout(layout)
         dialog.exec()
+
+    def seek_all(self, value):
+        # Seek each track to the corresponding position
+        # calculate max length
+        max_len = 1
+        for t in self.tracks:
+            if t.audio_data is not None:
+                max_len = max(max_len, len(t.audio_data))
+        target = int((value / 1000) * max_len)
+        for t in self.tracks:
+            if t.audio_data is not None:
+                t.position = min(target, len(t.audio_data))
+            else:
+                t.position = target
+            t.update_time()
 
     def handle_split(self, dialog, path, method):
         if not path:
