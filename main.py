@@ -81,6 +81,9 @@ class Track(QWidget):
         form.addRow("Effect", self.effects_dropdown)
         layout.addLayout(form)
 
+
+
+
         self.effects_options_layout = QFormLayout()
         layout.addLayout(self.effects_options_layout)
 
@@ -162,7 +165,7 @@ class Track(QWidget):
             # position at default
             default_norm = (cfg["default"] - cfg["min"]) / (cfg["max"] - cfg["min"])
             slider.setValue(int(default_norm * 100))
-            slider.valueChanged.connect(self.apply_effect)
+            slider.sliderReleased.connect(self.apply_effect)
             self.effects_options_layout.addRow(cfg["name"].replace("_", " ").title(), slider)
             self.effect_params[cfg["name"]] = (slider, cfg)
 
