@@ -1,14 +1,17 @@
-from pedalboard import Pedalboard, Reverb, Delay, Chorus, Phaser
+from pedalboard import Pedalboard, Reverb, Delay, Chorus, Phaser, PitchShift, Gain, Distortion, Compressor
 
 # Define available effects and their parameter configurations
 EFFECTS = {
-    "None": {"class": None, "params": []},
+    "None": {
+        "class": None,
+        "params": []
+    },
     "Reverb": {
         "class": Reverb,
         "params": [
             {"name": "room_size", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
             {"name": "damping", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
-            {"name": "wet_level", "type": "float", "min": 0.0, "max": 1.0, "default": 0.33},
+            {"name": "wet_level", "type": "float", "min": 0.0, "max": 0.5, "default": 0.33},
             {"name": "dry_level", "type": "float", "min": 0.0, "max": 1.0, "default": 0.4},
             {"name": "width", "type": "float", "min": 0.0, "max": 1.0, "default": 1.0},
         ]
@@ -35,6 +38,25 @@ EFFECTS = {
             {"name": "depth", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5}
         ]
     },
+    "Gain": {
+        "class": Gain,
+        "params": [
+            {"name": "gain_db", "type": "float", "min": -24.0, "max": 24.0, "default": 0.0}
+        ]
+    },
+    "Distortion": {
+        "class": Distortion,
+        "params": [
+            {"name": "drive_db", "type": "float", "min": 0.0, "max": 60.0, "default": 0.0}
+        ]
+    },
+    "Compressor": {
+        "class": Compressor,
+        "params": [
+            {"name": "threshold_db", "type": "float", "min": -60.0, "max": 0.0, "default": -24.0},
+            {"name": "ratio", "type": "float", "min": 1.0, "max": 20.0, "default": 4.0}
+        ]
+    }
 }
 
 def get_available_effects():
