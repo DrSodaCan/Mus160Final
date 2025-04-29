@@ -12,6 +12,8 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer
 from pedalboard import Pedalboard, Reverb, Delay
+
+from effects import *
 from splitter import convert_audio, spleeter_split, demucs_split
 
 
@@ -74,7 +76,7 @@ class Track(QWidget):
 
         form = QFormLayout()
         self.effects_dropdown = QComboBox()
-        self.effects_dropdown.addItems(["None", "Reverb", "Delay"])
+        self.effects_dropdown.addItems(get_available_effects())
         self.effects_dropdown.currentTextChanged.connect(self.effect_changed)
         form.addRow("Effect", self.effects_dropdown)
         layout.addLayout(form)
@@ -147,38 +149,36 @@ class Track(QWidget):
         self.time_label.setText(f"{format_time(current)} / {format_time(total)}")
 
     def effect_changed(self, name):
+        # clear old controls
         while self.effects_options_layout.count():
             item = self.effects_options_layout.takeAt(0)
             if item.widget(): item.widget().deleteLater()
         self.effect_params.clear()
-        if name == 'Reverb':
+
+        # build sliders based on config
+        for cfg in get_param_configs(name):
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, 100)
-            slider.setValue(50)
+            # position at default
+            default_norm = (cfg["default"] - cfg["min"]) / (cfg["max"] - cfg["min"])
+            slider.setValue(int(default_norm * 100))
             slider.valueChanged.connect(self.apply_effect)
-            self.effects_options_layout.addRow('Room', slider)
-            self.effect_params['room_size'] = slider
-        elif name == 'Delay':
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setRange(1, 2000)
-            slider.setValue(500)
-            slider.sliderReleased.connect(self.apply_effect)
-            self.effects_options_layout.addRow('Delay ms', slider)
-            self.effect_params['delay_seconds'] = slider
+            self.effects_options_layout.addRow(cfg["name"].replace("_", " ").title(), slider)
+            self.effect_params[cfg["name"]] = (slider, cfg)
+
         self.apply_effect()
 
     def apply_effect(self):
         if self.original_audio_data is None:
             return
-        name = self.effects_dropdown.currentText()
-        if name == 'Reverb':
-            room = self.effect_params['room_size'].value() / 100
-            self.board = Pedalboard([Reverb(room_size=room)])
-        elif name == 'Delay':
-            sec = self.effect_params['delay_seconds'].value() / 1000
-            self.board = Pedalboard([Delay(delay_seconds=sec)])
-        else:
-            self.board = Pedalboard([])
+        # build kwargs from slider positions
+        params = {}
+        for name, (slider, cfg) in self.effect_params.items():
+            norm = slider.value() / slider.maximum()
+            params[name] = cfg["min"] + (cfg["max"] - cfg["min"]) * norm
+
+        # create and run the board
+        self.board = create_pedalboard(self.effects_dropdown.currentText(), **params)
         self.audio_data = self.board(self.original_audio_data.copy(), self.sample_rate)
 
 class AudioApp(QWidget):
