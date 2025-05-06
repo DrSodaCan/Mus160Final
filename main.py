@@ -8,18 +8,18 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QFileDialog, QLabel, QSlider, QHBoxLayout, QComboBox,
     QFormLayout, QSizePolicy, QCheckBox,
-    QDialog, QLineEdit, QMessageBox
+    QDialog, QLineEdit, QMessageBox, QProgressDialog
 )
-from PyQt6.QtCore import Qt, QTimer
-from pedalboard import Pedalboard, Reverb, Delay
-
-from effects import *
+from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
+from pedalboard import Pedalboard
+from effects import get_available_effects, get_param_configs, create_pedalboard
 from splitter import convert_audio, spleeter_split, demucs_split
 
 
 def format_time(seconds: float) -> str:
     m, s = divmod(int(seconds), 60)
     return f"{m:02d}:{s:02d}"
+
 
 class Track(QWidget):
     instances = []
@@ -80,9 +80,6 @@ class Track(QWidget):
         self.effects_dropdown.currentTextChanged.connect(self.effect_changed)
         form.addRow("Effect", self.effects_dropdown)
         layout.addLayout(form)
-
-
-
 
         self.effects_options_layout = QFormLayout()
         layout.addLayout(self.effects_options_layout)
@@ -158,11 +155,10 @@ class Track(QWidget):
             if item.widget(): item.widget().deleteLater()
         self.effect_params.clear()
 
-        # build sliders based on config
+        # build sliders
         for cfg in get_param_configs(name):
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, 100)
-            # position at default
             default_norm = (cfg["default"] - cfg["min"]) / (cfg["max"] - cfg["min"])
             slider.setValue(int(default_norm * 100))
             slider.sliderReleased.connect(self.apply_effect)
@@ -174,15 +170,32 @@ class Track(QWidget):
     def apply_effect(self):
         if self.original_audio_data is None:
             return
-        # build kwargs from slider positions
         params = {}
         for name, (slider, cfg) in self.effect_params.items():
             norm = slider.value() / slider.maximum()
             params[name] = cfg["min"] + (cfg["max"] - cfg["min"]) * norm
-
-        # create and run the board
         self.board = create_pedalboard(self.effects_dropdown.currentText(), **params)
         self.audio_data = self.board(self.original_audio_data.copy(), self.sample_rate)
+
+
+# QThread for splitter
+class SplitterThread(QThread):
+    finished = pyqtSignal(tuple)
+    error = pyqtSignal(str)
+
+    def __init__(self, path, method):
+        super().__init__()
+        self.path = path
+        self.method = method
+
+    def run(self):
+        try:
+            conv = convert_audio(self.path)
+            stems = asyncio.run(spleeter_split(conv)) if self.method == 'spleeter' else asyncio.run(demucs_split(conv))
+            self.finished.emit(stems)
+        except Exception as e:
+            self.error.emit(str(e))
+
 
 class AudioApp(QWidget):
     def __init__(self):
@@ -289,33 +302,45 @@ class AudioApp(QWidget):
         dialog.setLayout(layout)
         dialog.exec()
 
+    def handle_split(self, dialog, path, method):
+        if not path:
+            QMessageBox.warning(self, 'No File', 'Select a file first')
+            return
+        dialog.accept()
+        # show progress dialog
+        self.progress = QProgressDialog('Splitting in progress…', None, 0, 0, self)
+        self.progress.setWindowTitle('Please wait')
+        self.progress.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.progress.setCancelButton(None)
+        self.progress.show()
+
+        # start background thread
+        self.splitter_thread = SplitterThread(path, method)
+        self.splitter_thread.finished.connect(self.on_split_finished)
+        self.splitter_thread.error.connect(self.on_split_error)
+        self.splitter_thread.start()
+
+    def on_split_finished(self, stems):
+        self.progress.close()
+        for i, t in enumerate(self.tracks[:4]):
+            t.load_audio(stems[i])
+        QMessageBox.information(self, 'Done', 'Splitting complete!')
+        self.splitter_thread = None
+
+    def on_split_error(self, err_msg):
+        self.progress.close()
+        QMessageBox.critical(self, 'Error', err_msg)
+        self.splitter_thread = None
+
     def seek_all(self, value):
-        # Seek each track to the corresponding position
-        # calculate max length
         max_len = 1
         for t in self.tracks:
             if t.audio_data is not None:
                 max_len = max(max_len, len(t.audio_data))
         target = int((value / 1000) * max_len)
         for t in self.tracks:
-            if t.audio_data is not None:
-                t.position = min(target, len(t.audio_data))
-            else:
-                t.position = target
+            t.position = min(target, len(t.audio_data)) if t.audio_data is not None else target
             t.update_time()
-
-    def handle_split(self, dialog, path, method):
-        if not path:
-            QMessageBox.warning(self, 'No File', 'Select a file first')
-            return
-        dialog.accept()
-        try:
-            conv = convert_audio(path)
-            stems = asyncio.run(spleeter_split(conv)) if method=='spleeter' else asyncio.run(demucs_split(conv))
-            for i, t in enumerate(self.tracks[:4]):
-                t.load_audio(stems[i])
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', str(e))
 
     def export_tracks(self):
         mixed, sr = None, None
