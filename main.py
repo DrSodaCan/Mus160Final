@@ -8,7 +8,8 @@ from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QFileDialog, QLabel, QSlider, QHBoxLayout, QComboBox,
     QFormLayout, QSizePolicy, QCheckBox,
-    QDialog, QLineEdit, QMessageBox, QProgressDialog
+    QDialog, QLineEdit, QMessageBox, QProgressDialog,
+    QColorDialog
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from pedalboard import Pedalboard
@@ -39,16 +40,23 @@ class Track(QWidget):
         self.board = Pedalboard([])
         self.muted = False
         self.soloed = False
+        self.track_color = None
 
         Track.instances.append(self)
         self.init_ui()
 
     def init_ui(self):
+        self.setStyleSheet("background-color: #303030; color: white;")
         layout = QVBoxLayout()
         layout.setSpacing(10)
 
+        header_layout = QHBoxLayout()
         self.label = QLabel(f"Track {self.track_number}: No file loaded")
-        layout.addWidget(self.label)
+        header_layout.addWidget(self.label)
+        self.color_button = QPushButton("Color")
+        self.color_button.clicked.connect(self.choose_color)
+        header_layout.addWidget(self.color_button)
+        layout.addLayout(header_layout)
 
         self.import_button = QPushButton('Import')
         self.import_button.clicked.connect(self.import_audio)
@@ -88,6 +96,17 @@ class Track(QWidget):
         self.timer.timeout.connect(self.update_time)
 
         self.setLayout(layout)
+
+    def choose_color(self):
+        color = QColorDialog.getColor(parent=self, title="Select Track Color")
+        if color.isValid():
+            self.track_color = color.name()
+            r, g, b = color.red(), color.green(), color.blue()
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+            text_color = 'black' if brightness > 128 else 'white'
+            self.setStyleSheet(
+                f"background-color: {self.track_color}; color: {text_color};"
+            )
 
     def import_audio(self):
         fname, _ = QFileDialog.getOpenFileName(self, "Open Audio File", "", "Audio Files (*.wav *.mp3 *.flac)")
@@ -177,8 +196,6 @@ class Track(QWidget):
         self.board = create_pedalboard(self.effects_dropdown.currentText(), **params)
         self.audio_data = self.board(self.original_audio_data.copy(), self.sample_rate)
 
-
-# QThread for splitter
 class SplitterThread(QThread):
     finished = pyqtSignal(tuple)
     error = pyqtSignal(str)
@@ -205,6 +222,7 @@ class AudioApp(QWidget):
         self.init_ui()
 
     def init_ui(self):
+        self.setStyleSheet("background-color: #202020; color: white;")
         main_layout = QVBoxLayout()
         ctrl_layout = QHBoxLayout()
 
@@ -366,6 +384,15 @@ class AudioApp(QWidget):
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
+    app.setStyleSheet(
+        "QWidget { color: white; background-color: #202020; }\n"
+        "QSlider::groove:horizontal { background: #404040; height: 8px; border-radius: 4px; }\n"
+        "QSlider::sub-page:horizontal { background: #888888; border-radius: 4px; }\n"
+        "QSlider::add-page:horizontal { background: #505050; border-radius: 4px; }\n"
+        "QSlider::handle:horizontal { background: #A0A0A0; width: 12px; margin: -2px 0; border-radius: 6px; }\n"
+        "QPushButton { background: #404040; color: white; }\n"
+        "QComboBox, QLineEdit { background: #303030; color: white; }"
+    )
     w = AudioApp()
     w.show()
     sys.exit(app.exec())
