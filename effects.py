@@ -11,8 +11,6 @@ EFFECTS = {
         "params": [
             {"name": "room_size", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
             {"name": "damping", "type": "float", "min": 0.0, "max": 1.0, "default": 0.5},
-            {"name": "wet_level", "type": "float", "min": 0.0, "max": 0.5, "default": 0.33},
-            {"name": "dry_level", "type": "float", "min": 0.0, "max": 1.0, "default": 0.4},
             {"name": "width", "type": "float", "min": 0.0, "max": 1.0, "default": 1.0},
         ]
     },
