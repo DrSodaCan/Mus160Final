@@ -13,13 +13,98 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from pedalboard import Pedalboard
-from effects import get_available_effects, get_param_configs, create_pedalboard
+from effects import get_available_effects, get_param_configs
 from splitter import convert_audio, spleeter_split, demucs_split
 
 
 def format_time(seconds: float) -> str:
     m, s = divmod(int(seconds), 60)
     return f"{m:02d}:{s:02d}"
+
+
+class TrackEffectWidget(QWidget):
+    def __init__(self, parent_track):
+        super().__init__()
+        self.parent_track = parent_track
+        self.locked = False
+        self.effect_name = None
+        self.param_sliders = {}
+
+        self.main_layout = QVBoxLayout()
+        self.header_layout = QHBoxLayout()
+
+        # Effect selector
+        self.name_combo = QComboBox()
+        self.name_combo.addItems(get_available_effects())
+        self.name_combo.currentTextChanged.connect(self.on_effect_change)
+        self.header_layout.addWidget(self.name_combo)
+
+        # Lock/Unlock button
+        self.lock_button = QPushButton("Lock")
+        self.lock_button.clicked.connect(self.toggle_lock)
+        self.header_layout.addWidget(self.lock_button)
+
+        # Remove button
+        self.remove_button = QPushButton("Remove")
+        self.remove_button.clicked.connect(self.on_remove)
+        self.header_layout.addWidget(self.remove_button)
+
+        self.main_layout.addLayout(self.header_layout)
+
+        # Parameters area
+        self.params_form = QFormLayout()
+        self.main_layout.addLayout(self.params_form)
+
+        self.setLayout(self.main_layout)
+        # Initialize with default effect
+        self.on_effect_change(self.name_combo.currentText())
+
+    def on_effect_change(self, name):
+        # Clear existing params
+        while self.params_form.count():
+            item = self.params_form.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self.param_sliders.clear()
+
+        # Build sliders for new effect
+        for cfg in get_param_configs(name):
+            slider = QSlider(Qt.Orientation.Horizontal)
+            slider.setRange(0, 100)
+            default_norm = (cfg['default'] - cfg['min']) / (cfg['max'] - cfg['min'])
+            slider.setValue(int(default_norm * 100))
+            slider.sliderReleased.connect(self.parent_track.apply_effect)
+            self.params_form.addRow(cfg['name'].replace('_', ' ').title(), slider)
+            self.param_sliders[cfg['name']] = (slider, cfg)
+
+        self.effect_name = name
+        self.parent_track.apply_effect()
+
+    def toggle_lock(self):
+        self.locked = not self.locked
+
+        # Hide/show the effect selector
+        self.name_combo.setVisible(not self.locked)
+
+        # Update button text
+        self.lock_button.setText("Unlock" if self.locked else "Lock")
+
+        # For each parameter slider, also hide/show its associated label
+        for slider, _ in self.param_sliders.values():
+            slider.setVisible(not self.locked)
+            lbl = self.params_form.labelForField(slider)
+            if lbl:
+                lbl.setVisible(not self.locked)
+
+        # Reapply audio chain so UI reflects current state
+        self.parent_track.apply_effect()
+
+
+    def on_remove(self):
+        # Remove this widget from parent
+        self.setParent(None)
+        self.parent_track.effect_widgets.remove(self)
+        self.parent_track.apply_effect()
 
 
 class Track(QWidget):
@@ -36,13 +121,12 @@ class Track(QWidget):
         self.is_playing = False
         self.position = 0
         self.duration = 0.0
-        self.effect_params = {}
-        self.board = Pedalboard([])
         self.muted = False
         self.soloed = False
         self.track_color = None
 
         Track.instances.append(self)
+        self.effect_widgets = []  # Hold multiple effects per track
         self.init_ui()
 
     def init_ui(self):
@@ -50,6 +134,7 @@ class Track(QWidget):
         layout = QVBoxLayout()
         layout.setSpacing(10)
 
+        # Header
         header_layout = QHBoxLayout()
         self.label = QLabel(f"Track {self.track_number}: No file loaded")
         header_layout.addWidget(self.label)
@@ -58,10 +143,12 @@ class Track(QWidget):
         header_layout.addWidget(self.color_button)
         layout.addLayout(header_layout)
 
+        # Import
         self.import_button = QPushButton('Import')
         self.import_button.clicked.connect(self.import_audio)
         layout.addWidget(self.import_button)
 
+        # Mute/Solo
         ctrl_layout = QHBoxLayout()
         self.mute_checkbox = QCheckBox('Mute')
         self.mute_checkbox.stateChanged.connect(lambda s: setattr(self, 'muted', bool(s)))
@@ -71,6 +158,7 @@ class Track(QWidget):
         ctrl_layout.addWidget(self.solo_checkbox)
         layout.addLayout(ctrl_layout)
 
+        # Volume
         vol_layout = QHBoxLayout()
         vol_layout.addWidget(QLabel('Vol'))
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
@@ -79,19 +167,20 @@ class Track(QWidget):
         vol_layout.addWidget(self.volume_slider)
         layout.addLayout(vol_layout)
 
+        # Time
         self.time_label = QLabel("00:00 / 00:00")
         layout.addWidget(self.time_label)
 
-        form = QFormLayout()
-        self.effects_dropdown = QComboBox()
-        self.effects_dropdown.addItems(get_available_effects())
-        self.effects_dropdown.currentTextChanged.connect(self.effect_changed)
-        form.addRow("Effect", self.effects_dropdown)
-        layout.addLayout(form)
+        # Effects area
+        self.effects_container = QVBoxLayout()
+        layout.addLayout(self.effects_container)
 
-        self.effects_options_layout = QFormLayout()
-        layout.addLayout(self.effects_options_layout)
+        # Add Effect button
+        self.add_effect_button = QPushButton("Add Effect")
+        self.add_effect_button.clicked.connect(self.add_effect)
+        layout.addWidget(self.add_effect_button)
 
+        # Playback timer
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_time)
 
@@ -102,7 +191,7 @@ class Track(QWidget):
         if color.isValid():
             self.track_color = color.name()
             r, g, b = color.red(), color.green(), color.blue()
-            brightness = (r * 299 + g * 587 + b * 114) / 1000
+            brightness = (r*299 + g*587 + b*114) / 1000
             text_color = 'black' if brightness > 128 else 'white'
             self.setStyleSheet(
                 f"background-color: {self.track_color}; color: {text_color};"
@@ -167,33 +256,28 @@ class Track(QWidget):
         total = self.duration
         self.time_label.setText(f"{format_time(current)} / {format_time(total)}")
 
-    def effect_changed(self, name):
-        # clear old controls
-        while self.effects_options_layout.count():
-            item = self.effects_options_layout.takeAt(0)
-            if item.widget(): item.widget().deleteLater()
-        self.effect_params.clear()
-
-        # build sliders
-        for cfg in get_param_configs(name):
-            slider = QSlider(Qt.Orientation.Horizontal)
-            slider.setRange(0, 100)
-            default_norm = (cfg["default"] - cfg["min"]) / (cfg["max"] - cfg["min"])
-            slider.setValue(int(default_norm * 100))
-            slider.sliderReleased.connect(self.apply_effect)
-            self.effects_options_layout.addRow(cfg["name"].replace("_", " ").title(), slider)
-            self.effect_params[cfg["name"]] = (slider, cfg)
-
-        self.apply_effect()
+    def add_effect(self):
+        widget = TrackEffectWidget(self)
+        self.effect_widgets.append(widget)
+        self.effects_container.addWidget(widget)
 
     def apply_effect(self):
         if self.original_audio_data is None:
             return
-        params = {}
-        for name, (slider, cfg) in self.effect_params.items():
-            norm = slider.value() / slider.maximum()
-            params[name] = cfg["min"] + (cfg["max"] - cfg["min"]) * norm
-        self.board = create_pedalboard(self.effects_dropdown.currentText(), **params)
+        # build pedalboard chain
+        chain = []
+        for w in self.effect_widgets:
+            if w.effect_name and w.effect_name != 'None':
+                params = {}
+                for name, (slider, cfg) in w.param_sliders.items():
+                    norm = slider.value() / slider.maximum()
+                    params[name] = cfg['min'] + (cfg['max'] - cfg['min']) * norm
+                # instantiate effect class
+                eff_cfg = get_param_configs(w.effect_name)  # reuse param configs
+                from effects import EFFECTS
+                cls = EFFECTS[w.effect_name]['class']
+                chain.append(cls(**params))
+        self.board = Pedalboard(chain)
         self.audio_data = self.board(self.original_audio_data.copy(), self.sample_rate)
 
 class SplitterThread(QThread):
