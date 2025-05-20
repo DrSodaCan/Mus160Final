@@ -56,18 +56,15 @@ class TrackEffectWidget(QWidget):
         self.main_layout.addLayout(self.params_form)
 
         self.setLayout(self.main_layout)
-        # Initialize with default effect
         self.on_effect_change(self.name_combo.currentText())
 
     def on_effect_change(self, name):
-        # Clear existing params
         while self.params_form.count():
             item = self.params_form.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
         self.param_sliders.clear()
 
-        # Build sliders for new effect
         for cfg in get_param_configs(name):
             slider = QSlider(Qt.Orientation.Horizontal)
             slider.setRange(0, 100)
@@ -83,25 +80,20 @@ class TrackEffectWidget(QWidget):
     def toggle_lock(self):
         self.locked = not self.locked
 
-        # Hide/show the effect selector
         self.name_combo.setVisible(not self.locked)
 
-        # Update button text
         self.lock_button.setText("Unlock" if self.locked else "Lock")
 
-        # For each parameter slider, also hide/show its associated label
         for slider, _ in self.param_sliders.values():
             slider.setVisible(not self.locked)
             lbl = self.params_form.labelForField(slider)
             if lbl:
                 lbl.setVisible(not self.locked)
 
-        # Reapply audio chain so UI reflects current state
         self.parent_track.apply_effect()
 
 
     def on_remove(self):
-        # Remove this widget from parent
         self.setParent(None)
         self.parent_track.effect_widgets.remove(self)
         self.parent_track.apply_effect()
@@ -126,7 +118,7 @@ class Track(QWidget):
         self.track_color = None
 
         Track.instances.append(self)
-        self.effect_widgets = []  # Hold multiple effects per track
+        self.effect_widgets = []
         self.init_ui()
 
     def init_ui(self):
@@ -273,7 +265,7 @@ class Track(QWidget):
                     norm = slider.value() / slider.maximum()
                     params[name] = cfg['min'] + (cfg['max'] - cfg['min']) * norm
                 # instantiate effect class
-                eff_cfg = get_param_configs(w.effect_name)  # reuse param configs
+                eff_cfg = get_param_configs(w.effect_name)
                 from effects import EFFECTS
                 cls = EFFECTS[w.effect_name]['class']
                 chain.append(cls(**params))
@@ -359,7 +351,7 @@ class AudioApp(QWidget):
         main_layout.addLayout(tracks_layout)
 
         self.setLayout(main_layout)
-        self.setWindowTitle('Remixing Demo')
+        self.setWindowTitle('Remixer Demo')
         self.resize(1200, 600)
 
     def toggle_play_stop(self):
@@ -426,14 +418,16 @@ class AudioApp(QWidget):
             QMessageBox.warning(self, 'No File', 'Select a file first')
             return
         dialog.accept()
-        # show progress dialog
+
+
+        #Progress bar
         self.progress = QProgressDialog('Splitting in progress…', None, 0, 0, self)
         self.progress.setWindowTitle('Please wait')
         self.progress.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.progress.setCancelButton(None)
         self.progress.show()
 
-        # start background thread
+        # Background task
         self.splitter_thread = SplitterThread(path, method)
         self.splitter_thread.finished.connect(self.on_split_finished)
         self.splitter_thread.error.connect(self.on_split_error)
@@ -452,10 +446,8 @@ class AudioApp(QWidget):
         self.splitter_thread = None
 
     def seek_all(self, value):
-        # 1) Remember whether we were playing
         was_playing = self.is_playing
 
-        # 2) If playing, stop all tracks and our global timer
         if was_playing:
             for t in self.tracks:
                 t.stop()
@@ -463,14 +455,12 @@ class AudioApp(QWidget):
             self.play_button.setText('Play')
             self.is_playing = False
 
-        # 3) Compute new target position
         max_len = 1
         for t in self.tracks:
             if t.audio_data is not None:
                 max_len = max(max_len, len(t.audio_data))
         target = int((value / 1000) * max_len)
 
-        # 4) Apply it safely on the main thread
         for t in self.tracks:
             if t.audio_data is not None:
                 t.position = min(target, len(t.audio_data))
