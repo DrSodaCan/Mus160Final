@@ -311,18 +311,22 @@ class AudioApp(QWidget):
         ctrl_layout = QHBoxLayout()
 
         self.play_button = QPushButton('Play')
+        self.play_button.setStyleSheet("background-color: green; color: white;")
         self.play_button.clicked.connect(self.toggle_play_stop)
         ctrl_layout.addWidget(self.play_button)
 
         self.reset_button = QPushButton('Reset')
+        self.reset_button.setStyleSheet("background-color: orange; color: black;")
         self.reset_button.clicked.connect(self.reset_all)
         ctrl_layout.addWidget(self.reset_button)
 
         self.split_button = QPushButton('Splitter')
+        self.split_button.setStyleSheet("background-color: purple; color: white;")
         self.split_button.clicked.connect(self.open_splitter_dialog)
         ctrl_layout.addWidget(self.split_button)
 
         self.export_button = QPushButton('Export')
+        self.export_button.setStyleSheet("background-color: teal; color: white;")
         self.export_button.clicked.connect(self.export_tracks)
         ctrl_layout.addWidget(self.export_button)
 
@@ -337,14 +341,25 @@ class AudioApp(QWidget):
         self.global_timer.timeout.connect(self.update_global_progress)
 
         tracks_layout = QHBoxLayout()
+
+
+        default_colors = ['#FF4C4C', '#4C6FFF', '#3BCB3B', '#FFEB3B']  # Red, Blue, Green, Yellow
         for i in range(4):
-            tr = Track(i+1, parent_app=self)
+            tr = Track(i + 1, parent_app=self)
+            default_color = default_colors[i % len(default_colors)]
+            tr.track_color = default_color
+            r, g, b = tr.palette().color(tr.backgroundRole()).red(), tr.palette().color(
+                tr.backgroundRole()).green(), tr.palette().color(tr.backgroundRole()).blue()
+            brightness = (r * 299 + g * 587 + b * 114) / 1000
+            text_color = 'black' if brightness > 128 else 'white'
+            tr.setStyleSheet(f"background-color: {default_color}; color: {text_color};")
             self.tracks.append(tr)
             tracks_layout.addWidget(tr)
+
         main_layout.addLayout(tracks_layout)
 
         self.setLayout(main_layout)
-        self.setWindowTitle('Multi-Track Pedalboard')
+        self.setWindowTitle('Remixing Demo')
         self.resize(1200, 600)
 
     def toggle_play_stop(self):
@@ -354,12 +369,14 @@ class AudioApp(QWidget):
                 t.play()
             self.global_timer.start(100)
             self.play_button.setText('Stop')
+            self.play_button.setStyleSheet("background-color: red; color: white;")
             self.is_playing = True
         else:
             for t in self.tracks:
                 t.stop()
             self.global_timer.stop()
             self.play_button.setText('Play')
+            self.play_button.setStyleSheet("background-color: green; color: white;")
             self.is_playing = False
 
     def reset_all(self):
