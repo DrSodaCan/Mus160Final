@@ -1,4 +1,4 @@
-from pedalboard import Pedalboard, Reverb, Delay, Chorus, Phaser, PitchShift, Gain, Distortion, Compressor
+from pedalboard import Pedalboard, Reverb, Delay, Chorus, Phaser, PitchShift, Gain, Distortion, Limiter, Compressor
 
 # Define available effects and their parameter configurations
 EFFECTS = {
