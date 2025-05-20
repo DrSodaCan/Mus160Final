@@ -435,14 +435,38 @@ class AudioApp(QWidget):
         self.splitter_thread = None
 
     def seek_all(self, value):
+        # 1) Remember whether we were playing
+        was_playing = self.is_playing
+
+        # 2) If playing, stop all tracks and our global timer
+        if was_playing:
+            for t in self.tracks:
+                t.stop()
+            self.global_timer.stop()
+            self.play_button.setText('Play')
+            self.is_playing = False
+
+        # 3) Compute new target position
         max_len = 1
         for t in self.tracks:
             if t.audio_data is not None:
                 max_len = max(max_len, len(t.audio_data))
         target = int((value / 1000) * max_len)
+
+        # 4) Apply it safely on the main thread
         for t in self.tracks:
-            t.position = min(target, len(t.audio_data)) if t.audio_data is not None else target
-            t.update_time()
+            if t.audio_data is not None:
+                t.position = min(target, len(t.audio_data))
+                t.update_time()
+
+        # 5) If we were playing, restart playback and timer
+        if was_playing:
+            for t in self.tracks:
+                t.play()
+            self.global_timer.start(100)
+            self.play_button.setText('Stop')
+            self.is_playing = True
+
 
     def export_tracks(self):
         mixed, sr = None, None
