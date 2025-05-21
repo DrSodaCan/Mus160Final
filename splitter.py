@@ -1,4 +1,3 @@
-# splitter.py
 import asyncio
 import os
 import subprocess
@@ -10,15 +9,14 @@ from demucs.apply import apply_model
 import torchaudio
 from spleeter.separator import Separator
 
-# Import caching helper.
 from utils import cache_file, get_cache_dir
 
 def convert_audio(file_path: str) -> str:
-    """Converts the input audio file to WAV if necessary and caches it."""
+    """Checks if a file is a .wav or .mp3, the only supported file formats from Demucs and Spleeter"""
     SUPPORTED_FORMATS = {".mp3", ".wav"}
     ext = os.path.splitext(file_path)[1].lower()
     if ext in SUPPORTED_FORMATS:
-        return cache_file(file_path)  # Cache and return.
+        return cache_file(file_path)
     else:
         cache_dir = get_cache_dir()
         # Save converted file into the cache folder.
@@ -41,14 +39,13 @@ async def spleeter_split(file_path: str, output_dir: str = None) -> tuple:
     track_folder = os.path.join(output_dir, base_name)
     expected_tracks = ("vocals.wav", "drums.wav", "bass.wav", "other.wav")
 
-    # Check if the folder exists and has the expected output files.
+    #Check if exists
     if os.path.isdir(track_folder) and all(os.path.exists(os.path.join(track_folder, t)) for t in expected_tracks):
         print(f"Cache hit: Using previously split files from {track_folder}")
         return tuple(os.path.join(track_folder, t) for t in expected_tracks)
 
-    # Otherwise, perform the splitting.
+    #Was not in cache; start actually splitting
     print("Cache miss: Running Spleeter splitting process...")
-    from spleeter.separator import Separator
     separator = Separator("spleeter:4stems")
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, separator.separate_to_file, file_path, output_dir)
@@ -58,7 +55,6 @@ async def spleeter_split(file_path: str, output_dir: str = None) -> tuple:
 
 async def demucs_split(file_path: str, output_dir: str = None) -> tuple:
     """Splits a song into stems using Demucs and caches the result."""
-    from utils import get_cache_dir
     if output_dir is None:
         output_dir = os.path.join(get_cache_dir(), "Demucs_Output")
     os.makedirs(output_dir, exist_ok=True)

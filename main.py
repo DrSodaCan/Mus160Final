@@ -403,7 +403,7 @@ class AudioApp(QWidget):
         row = QHBoxLayout(); row.addWidget(file_edit); row.addWidget(browse)
         form.addRow('File', row)
 
-        method = QComboBox(); method.addItems(['Spleeter','Demucs'])
+        method = QComboBox(); method.addItems(["Demucs", "Spleeter"])
         form.addRow('Method', method)
 
         layout.addLayout(form)
