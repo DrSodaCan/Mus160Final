@@ -14,7 +14,7 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtCore import Qt, QTimer, QThread, pyqtSignal
 from pedalboard import Pedalboard
 from effects import get_available_effects, get_param_configs
-from splitter import convert_audio, spleeter_split, demucs_split
+from splitter import convert_audio, demucs_split
 
 
 def format_time(seconds: float) -> str:
@@ -284,7 +284,7 @@ class SplitterThread(QThread):
     def run(self):
         try:
             conv = convert_audio(self.path)
-            stems = asyncio.run(spleeter_split(conv)) if self.method == 'spleeter' else asyncio.run(demucs_split(conv))
+            stems = asyncio.run(demucs_split(conv))
             self.finished.emit(stems)
         except Exception as e:
             self.error.emit(str(e))
