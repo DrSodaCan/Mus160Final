@@ -7,7 +7,6 @@ import torch
 from demucs import pretrained
 from demucs.apply import apply_model
 import torchaudio
-from spleeter.separator import Separator
 
 from utils import cache_file, get_cache_dir
 
@@ -27,30 +26,6 @@ def convert_audio(file_path: str) -> str:
             audio.export(cached_file, format="wav")
         return cached_file
 
-
-async def spleeter_split(file_path: str, output_dir: str = None) -> tuple:
-    """Splits a song into stems using Spleeter and caches the result."""
-    from utils import get_cache_dir
-    if output_dir is None:
-        output_dir = os.path.join(get_cache_dir(), "Spleeter_Output")
-    os.makedirs(output_dir, exist_ok=True)
-
-    base_name = os.path.splitext(os.path.basename(file_path))[0]
-    track_folder = os.path.join(output_dir, base_name)
-    expected_tracks = ("vocals.wav", "drums.wav", "bass.wav", "other.wav")
-
-    #Check if exists
-    if os.path.isdir(track_folder) and all(os.path.exists(os.path.join(track_folder, t)) for t in expected_tracks):
-        print(f"Cache hit: Using previously split files from {track_folder}")
-        return tuple(os.path.join(track_folder, t) for t in expected_tracks)
-
-    #Was not in cache; start actually splitting
-    print("Cache miss: Running Spleeter splitting process...")
-    separator = Separator("spleeter:4stems")
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, separator.separate_to_file, file_path, output_dir)
-
-    return tuple(os.path.join(track_folder, t) for t in expected_tracks)
 
 
 async def demucs_split(file_path: str, output_dir: str = None) -> tuple:
@@ -90,13 +65,8 @@ async def main():
 
     converted_file = convert_audio(file_path)
     print("File ready")
-    if method == "spleeter":
-        stems = await spleeter_split(converted_file)
-    elif method == "demucs":
-        stems = await demucs_split(converted_file)
-    else:
-        print("Invalid method chosen.")
-        return
+    stems = await demucs_split(converted_file)
+
 
     print("Separated stem files:")
     for path in stems:
