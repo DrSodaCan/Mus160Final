@@ -1,9 +1,12 @@
 import sys
 import os
 import asyncio
+from os.path import basename
+
 import soundfile as sf
 import numpy as np
 import sounddevice as sd
+from PyQt6.QtGui import QPixmap, QFont
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QPushButton,
     QFileDialog, QLabel, QSlider, QHBoxLayout, QComboBox,
@@ -125,6 +128,7 @@ class Track(QWidget):
         self.setStyleSheet("background-color: #303030; color: white;")
         layout = QVBoxLayout()
         layout.setSpacing(10)
+
 
         # Header
         header_layout = QHBoxLayout()
@@ -296,63 +300,136 @@ class AudioApp(QWidget):
         self.tracks = []
         self.is_playing = False
         self.init_ui()
-
     def init_ui(self):
         self.setStyleSheet("background-color: #202020; color: white;")
         main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(0, 0, 0, 10)
+        main_layout.setSpacing(5)
+
+        btn_font = QFont("Roboto", 16)
+        play_font = QFont("Roboto", 24, QFont.Weight.DemiBold)
+
+        #Buttion Style Sheet
+        self.btn_style = (
+            "padding: 15px 30px; "
+            "border-radius: 12px; "
+            "background-color: {}; color: white;"
+        )
+
+        #Logo
+        logo_layout = QHBoxLayout()
+        logo_layout.setContentsMargins(10, 10, 10, 0)
+        logo_label = QLabel()
+        pixmap = QPixmap("./graphics/logo.png").scaled(614, 82,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation
+        )
+        logo_label.setPixmap(pixmap)
+        logo_layout.addWidget(logo_label)
+        main_layout.addLayout(logo_layout)
+        main_layout.addStretch()
+
+        main_layout.addSpacing(50)
+
+        #Now Playing label
+        self.now_playing_label = QLabel("")
+        self.now_playing_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.now_playing_label.setFont(btn_font)
+        main_layout.addWidget(self.now_playing_label)
+
+        #Primary controls HBox
         ctrl_layout = QHBoxLayout()
+        ctrl_layout.setContentsMargins(0, 0, 0, 0)
+        ctrl_layout.setSpacing(10)
 
-        self.play_button = QPushButton('Play')
-        self.play_button.setStyleSheet("background-color: green; color: white;")
-        self.play_button.clicked.connect(self.toggle_play_stop)
-        ctrl_layout.addWidget(self.play_button)
-
-        self.reset_button = QPushButton('Reset')
-        self.reset_button.setStyleSheet("background-color: orange; color: black;")
-        self.reset_button.clicked.connect(self.reset_all)
-        ctrl_layout.addWidget(self.reset_button)
-
+        #Splitter button
         self.split_button = QPushButton('Splitter')
-        self.split_button.setStyleSheet("background-color: purple; color: white;")
+        self.split_button.setFont(btn_font)
+        self.split_button.setStyleSheet(self.btn_style.format('#800080'))
+        self.split_button.setMinimumSize(120, 50)
         self.split_button.clicked.connect(self.open_splitter_dialog)
-        ctrl_layout.addWidget(self.split_button)
 
+        #Play button
+        self.play_button = QPushButton('Play')
+        self.play_button.setFont(play_font)
+        self.play_button.setStyleSheet(self.btn_style.format('#008000'))
+        self.play_button.setFixedSize(200, 100)
+        self.play_button.clicked.connect(self.toggle_play_stop)
+
+        #Export button
         self.export_button = QPushButton('Export')
-        self.export_button.setStyleSheet("background-color: teal; color: white;")
+        self.export_button.setFont(btn_font)
+        self.export_button.setStyleSheet(self.btn_style.format('#008080'))
+        self.export_button.setMinimumSize(120, 50)
         self.export_button.clicked.connect(self.export_tracks)
-        ctrl_layout.addWidget(self.export_button)
 
+        #assemble control row
+        ctrl_layout.addStretch()
+        ctrl_layout.addWidget(self.split_button)
+        ctrl_layout.addStretch()
+        ctrl_layout.addWidget(self.play_button)
+        ctrl_layout.addStretch()
+        ctrl_layout.addWidget(self.export_button)
+        ctrl_layout.addStretch()
         main_layout.addLayout(ctrl_layout)
 
+        #Reset button
+        reset_layout = QHBoxLayout()
+        reset_layout.addStretch()
+        self.reset_button = QPushButton('Reset')
+        self.reset_button.setFont(btn_font)
+        self.reset_button.setStyleSheet(
+            "padding: 10px 20px; border-radius: 10px; "
+            "background-color: orange; color: black;"
+        )
+        self.reset_button.clicked.connect(self.reset_all)
+        reset_layout.addWidget(self.reset_button)
+        reset_layout.addStretch()
+        main_layout.addLayout(reset_layout)
+
+        #Timer
+        #xx:xx
+        self.global_time_label = QLabel("00:00 / 00:00")
+        self.global_time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.global_time_label.setFont(btn_font)
+        main_layout.addWidget(self.global_time_label)
+
+        #Slider
         self.global_slider = QSlider(Qt.Orientation.Horizontal)
         self.global_slider.setRange(0, 1000)
         self.global_slider.sliderMoved.connect(self.seek_all)
-        main_layout.addWidget(self.global_slider)
+        slider_container = QHBoxLayout()
+        slider_container.setContentsMargins(20, 0, 20, 0)  # buffer from edges
+        slider_container.addWidget(self.global_slider)
+        main_layout.addLayout(slider_container)
 
+        # Timer for updating progress
         self.global_timer = QTimer()
         self.global_timer.timeout.connect(self.update_global_progress)
 
+        #Tracks area
         tracks_layout = QHBoxLayout()
+        tracks_layout.setSpacing(15)
 
-
-        default_colors = ['#FF4C4C', '#4C6FFF', '#3BCB3B', '#FFEB3B']  # Red, Blue, Green, Yellow
+        default_colors = ['#FF4C4C', '#4C6FFF', '#3BCB3B', '#FFEB3B']
         for i in range(4):
             tr = Track(i + 1, parent_app=self)
             default_color = default_colors[i % len(default_colors)]
             tr.track_color = default_color
-            r, g, b = tr.palette().color(tr.backgroundRole()).red(), tr.palette().color(
-                tr.backgroundRole()).green(), tr.palette().color(tr.backgroundRole()).blue()
+            r = tr.palette().color(tr.backgroundRole()).red()
+            g = tr.palette().color(tr.backgroundRole()).green()
+            b = tr.palette().color(tr.backgroundRole()).blue()
             brightness = (r * 299 + g * 587 + b * 114) / 1000
             text_color = 'black' if brightness > 128 else 'white'
             tr.setStyleSheet(f"background-color: {default_color}; color: {text_color};")
             self.tracks.append(tr)
             tracks_layout.addWidget(tr)
 
-        main_layout.addLayout(tracks_layout)
+        main_layout.addLayout(tracks_layout, 1)
 
         self.setLayout(main_layout)
         self.setWindowTitle('Remixer Demo')
-        self.resize(1200, 600)
+        self.resize(1920, 1080)
 
     def toggle_play_stop(self):
         if not self.is_playing:
@@ -360,15 +437,19 @@ class AudioApp(QWidget):
                 t.position = 0
                 t.play()
             self.global_timer.start(100)
+
             self.play_button.setText('Stop')
-            self.play_button.setStyleSheet("background-color: red; color: white;")
+            self.play_button.setStyleSheet(self.btn_style.format('#FF0000'))
+
             self.is_playing = True
         else:
             for t in self.tracks:
                 t.stop()
             self.global_timer.stop()
+
             self.play_button.setText('Play')
-            self.play_button.setStyleSheet("background-color: green; color: white;")
+            self.play_button.setStyleSheet(self.btn_style.format('#008000'))
+
             self.is_playing = False
 
     def reset_all(self):
@@ -378,18 +459,31 @@ class AudioApp(QWidget):
         self.global_slider.setValue(0)
 
     def update_global_progress(self):
+        # figure out the furthest playback position and total length
         max_pos = 0
         max_len = 1
+        sample_rate = None
         for t in self.tracks:
             if t.audio_data is None:
                 continue
             length = len(t.audio_data)
-            max_len = max(max_len, length)
-            max_pos = max(max_pos, t.position)
+            if length > max_len:
+                max_len = length
+                sample_rate = t.sample_rate
+            if t.position > max_pos:
+                max_pos = t.position
+
+        # update slider
         val = int((max_pos / max_len) * 1000)
         self.global_slider.blockSignals(True)
         self.global_slider.setValue(val)
         self.global_slider.blockSignals(False)
+
+        # update time label
+        if sample_rate:
+            current_sec = max_pos / sample_rate
+            total_sec = max_len / sample_rate
+            self.global_time_label.setText(f"{format_time(current_sec)} / {format_time(total_sec)}")
 
     def open_splitter_dialog(self):
         dialog = QDialog(self)
@@ -419,8 +513,11 @@ class AudioApp(QWidget):
             return
         dialog.accept()
 
+        # show the song name above the Play button
+        from os.path import basename
+        self.now_playing_label.setText(f"Now playing: {basename(path)}")
 
-        #Progress bar
+        # Progress bar
         self.progress = QProgressDialog('Splitting in progress…', None, 0, 0, self)
         self.progress.setWindowTitle('Please wait')
         self.progress.setWindowModality(Qt.WindowModality.ApplicationModal)
@@ -472,8 +569,8 @@ class AudioApp(QWidget):
                 t.play()
             self.global_timer.start(100)
             self.play_button.setText('Stop')
-            self.is_playing = True
 
+            self.is_playing = True
 
     def export_tracks(self):
         mixed, sr = None, None

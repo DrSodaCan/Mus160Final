@@ -39,12 +39,15 @@ async def split_all(directory):
     for item in filenames:
         print(f"Running split operation on {item}")
         await demucs_split(os.path.join(directory, item))
+        print(f"{item} finished!\n")
 
 
 async def main():
     directory = "C:/Users/Atlas/Music/Splitter Project/"
     print("Starting split")
     await split_all(directory)
+    print("")
+    print("Split done!")
 
 if __name__ == "__main__":
     asyncio.run(main())
